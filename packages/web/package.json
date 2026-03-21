@@ -1,0 +1,25 @@
+{
+  "name": "@web-ppt/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@web-ppt/shared": "file:../shared",
+    "marked": "^15.0.7",
+    "nanoid": "^5.0.8",
+    "yjs": "^13.6.23",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.6",
+    "vue-tsc": "^2.1.10"
+  }
+}
