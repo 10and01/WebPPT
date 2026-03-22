@@ -113,7 +113,13 @@ export interface GenerateDeckRequest {
 
 export interface GenerateDeckResponse {
   title: string;
-  slideDrafts: Array<{ title: string; bullets: string[]; visualHint: string }>;
+  slideDrafts: Array<{
+    title: string;
+    bullets: string[];
+    markdown: string;
+    bgColor: string;
+    visualHint: string;
+  }>;
 }
 
 export interface PolishTextRequest {

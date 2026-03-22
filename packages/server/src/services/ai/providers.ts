@@ -147,6 +147,49 @@ export class MockProvider implements AIProvider {
       ]);
     }
 
+    if (prompt.includes('"slideDrafts"')) {
+      return JSON.stringify({
+        title: "AI Draft Presentation",
+        slideDrafts: [
+          {
+            title: "现状与挑战",
+            bullets: ["行业环境变化快", "成本与效率双重压力", "组织协同存在断点"],
+            markdown: "# 现状与挑战\n\n- 行业环境变化快\n- 成本与效率双重压力\n- 组织协同存在断点",
+            bgColor: "#F8FAFC",
+            visualHint: "Use clean icon + short chart"
+          },
+          {
+            title: "商业模式路径",
+            bullets: ["价值主张重塑", "关键资源匹配", "盈利模型分层"],
+            markdown: "# 商业模式路径\n\n- 价值主张重塑\n- 关键资源匹配\n- 盈利模型分层",
+            bgColor: "#EFF6FF",
+            visualHint: "Use clean icon + short chart"
+          },
+          {
+            title: "关键数据与指标",
+            bullets: ["收入增长率", "获客成本", "用户留存率"],
+            markdown: "# 关键数据与指标\n\n- 收入增长率\n- 获客成本\n- 用户留存率",
+            bgColor: "#ECFDF5",
+            visualHint: "Use clean icon + short chart"
+          },
+          {
+            title: "落地计划",
+            bullets: ["30天快速试点", "90天流程固化", "年度规模化推广"],
+            markdown: "# 落地计划\n\n- 30天快速试点\n- 90天流程固化\n- 年度规模化推广",
+            bgColor: "#FFFBEB",
+            visualHint: "Use clean icon + short chart"
+          },
+          {
+            title: "风险与对策",
+            bullets: ["资源不足风险", "执行偏差风险", "建立周度复盘机制"],
+            markdown: "# 风险与对策\n\n- 资源不足风险\n- 执行偏差风险\n- 建立周度复盘机制",
+            bgColor: "#FEF2F2",
+            visualHint: "Use clean icon + short chart"
+          }
+        ]
+      });
+    }
+
     return [
       "1. 现状与挑战",
       "2. 商业模式路径",

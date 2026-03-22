@@ -92,6 +92,16 @@ function makeDefaultStyle() {
   };
 }
 
+function extractBulletLinesFromMarkdown(markdown: string): string[] {
+  return markdown
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^[-*+]\s+/.test(line))
+    .map((line) => line.replace(/^[-*+]\s+/, "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
 function ensureSelectedSlide() {
   if (!activeDeck.value) {
     return;
@@ -508,7 +518,10 @@ async function onAIGenerate() {
     const data = await generateDeckDraft(activeDeck.value.id, { topic: aiTopic.value, slides: 5 });
     const newSlides: Slide[] = data.draft.slideDrafts.map((item, index) => {
       const id = nanoid();
-      const elements: ElementModel[] = item.bullets.map((bullet, bIndex) => ({
+      const bulletLines = extractBulletLinesFromMarkdown(item.markdown);
+      const displayBullets = bulletLines.length ? bulletLines : item.bullets;
+
+      const elements: ElementModel[] = displayBullets.map((bullet, bIndex) => ({
         id: nanoid(),
         slideId: id,
         type: "text",
@@ -527,7 +540,7 @@ async function onAIGenerate() {
         deckId: activeDeck.value!.id,
         slideNumber: index + 1,
         title: item.title,
-        bgColor: "#ffffff",
+        bgColor: item.bgColor || "#ffffff",
         elements,
         createdAt: Date.now(),
         updatedAt: Date.now()
@@ -798,7 +811,7 @@ onBeforeUnmount(() => {
       </div>
       <input ref="uploadInputRef" type="file" accept="image/*" style="display: none" @change="onLocalImageSelected" />
 
-      <div class="canvas" v-if="activeSlide">
+      <div class="canvas" v-if="activeSlide" :style="{ backgroundColor: activeSlide.bgColor || '#ffffff' }">
         <h1 class="slide-title">{{ activeSlide.title }}</h1>
 
         <div

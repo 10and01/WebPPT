@@ -4,6 +4,98 @@ import { AnthropicProvider, MockProvider, OpenAIProvider, type AIProvider } from
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 
+const DEFAULT_BG_COLORS = ["#F8FAFC", "#EFF6FF", "#ECFDF5", "#FFFBEB", "#FEF2F2", "#F5F3FF"];
+
+function normalizeHexColor(value: string | undefined, index: number): string {
+  const fallback = DEFAULT_BG_COLORS[index % DEFAULT_BG_COLORS.length];
+  if (!value) {
+    return fallback;
+  }
+
+  const normalized = value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(normalized)) {
+    return normalized;
+  }
+
+  return fallback;
+}
+
+function cleanJsonText(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced && fenced[1]) {
+    return fenced[1].trim();
+  }
+  return trimmed;
+}
+
+function parseStructuredDraft(text: string, slides: number, topic: string): GenerateDeckResponse {
+  const fallback: GenerateDeckResponse = {
+    title: `${topic} - AI Draft`,
+    slideDrafts: Array.from({ length: slides }, (_, index) => ({
+      title: `Slide ${index + 1}`,
+      bullets: ["要点A", "要点B", "要点C"],
+      markdown: `# Slide ${index + 1}\n\n- 要点A\n- 要点B\n- 要点C`,
+      bgColor: normalizeHexColor(undefined, index),
+      visualHint: "Use clean icon + short chart"
+    }))
+  };
+
+  try {
+    const parsed = JSON.parse(cleanJsonText(text)) as {
+      title?: string;
+      slideDrafts?: Array<{
+        title?: string;
+        bullets?: string[];
+        markdown?: string;
+        bgColor?: string;
+        visualHint?: string;
+      }>;
+    };
+
+    if (!Array.isArray(parsed.slideDrafts) || parsed.slideDrafts.length === 0) {
+      return fallback;
+    }
+
+    const normalizedDrafts = parsed.slideDrafts.slice(0, slides).map((item, index) => {
+      const bullets = Array.isArray(item.bullets) && item.bullets.length
+        ? item.bullets.slice(0, 5).map((bullet) => String(bullet).trim()).filter(Boolean)
+        : ["要点A", "要点B", "要点C"];
+
+      const markdown =
+        typeof item.markdown === "string" && item.markdown.trim()
+          ? item.markdown.trim()
+          : `# ${item.title || `Slide ${index + 1}`}\n\n${bullets.map((bullet) => `- ${bullet}`).join("\n")}`;
+
+      return {
+        title: (item.title || `Slide ${index + 1}`).trim(),
+        bullets,
+        markdown,
+        bgColor: normalizeHexColor(item.bgColor, index),
+        visualHint: (item.visualHint || "Use clean icon + short chart").trim()
+      };
+    });
+
+    while (normalizedDrafts.length < slides) {
+      const index = normalizedDrafts.length;
+      normalizedDrafts.push({
+        title: `Slide ${index + 1}`,
+        bullets: ["要点A", "要点B", "要点C"],
+        markdown: `# Slide ${index + 1}\n\n- 要点A\n- 要点B\n- 要点C`,
+        bgColor: normalizeHexColor(undefined, index),
+        visualHint: "Use clean icon + short chart"
+      });
+    }
+
+    return {
+      title: (parsed.title || `${topic} - AI Draft`).trim(),
+      slideDrafts: normalizedDrafts
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 function createProvider(config: AIConfig): AIProvider {
   if (config.provider === "openai" && config.apiKey) {
     return new OpenAIProvider(config.apiKey, config.apiEndpoint);
@@ -44,10 +136,29 @@ export async function generateDeckDraft(config: AIConfig, input: GenerateDeckReq
 
   return retryWithBackoff(async () => {
     const prompt = [
-      "你是PPT策划助手。",
+      "你是PPT策划与版式助手。",
       `主题: ${input.topic}`,
       `页数: ${input.slides}`,
-      "输出每页标题和3条要点，使用换行分隔。"
+      "请严格输出JSON对象，不要输出额外说明，不要使用Markdown代码块。",
+      "JSON结构:",
+      "{",
+      '  "title": "整套PPT标题",',
+      '  "slideDrafts": [',
+      "    {",
+      '      "title": "单页标题",',
+      '      "bullets": ["要点1", "要点2", "要点3"],',
+      '      "markdown": "# 单页标题\\n\\n- 要点1\\n- 要点2\\n- 要点3",',
+      '      "bgColor": "#RRGGBB",',
+      '      "visualHint": "视觉建议"',
+      "    }",
+      "  ]",
+      "}",
+      "规则:",
+      "1) slideDrafts数量必须等于页数。",
+      "2) bullets每页3到5条，简短可展示。",
+      "3) markdown必须与title/bullets语义一致。",
+      "4) bgColor必须是浅色、可读性高的#RRGGBB。",
+      "5) 禁止输出任何JSON以外文本。"
     ].join("\n");
 
     const text = await provider.generate(prompt, {
@@ -56,22 +167,7 @@ export async function generateDeckDraft(config: AIConfig, input: GenerateDeckReq
       maxTokens: config.maxTokens ?? 800
     });
 
-    const lines = text
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .slice(0, input.slides);
-
-    const slideDrafts = lines.map((line, index) => ({
-      title: line.replace(/^\d+\.\s*/, "") || `Slide ${index + 1}`,
-      bullets: ["要点A", "要点B", "要点C"],
-      visualHint: "Use clean icon + short chart"
-    }));
-
-    return {
-      title: `${input.topic} - AI Draft`,
-      slideDrafts
-    };
+    return parseStructuredDraft(text, input.slides, input.topic);
   });
 }
 

@@ -116,7 +116,16 @@ export async function generateDeckDraft(deckId: string, input: GenerateDeckReque
   }
 
   return (await response.json()) as {
-    draft: { title: string; slideDrafts: Array<{ title: string; bullets: string[]; visualHint: string }> };
+    draft: {
+      title: string;
+      slideDrafts: Array<{
+        title: string;
+        bullets: string[];
+        markdown: string;
+        bgColor: string;
+        visualHint: string;
+      }>;
+    };
   };
 }
 
