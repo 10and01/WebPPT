@@ -1,11 +1,17 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { AIConfig, PolishTextRequest } from "@web-ppt/shared";
-import { generateDeckDraft, polishText, suggestVisuals, generateOutline } from "../services/ai/gateway";
+import { describe, it, expect } from "vitest";
+import type { AIConfig } from "@web-ppt/shared";
+import {
+  generateDeckDraft,
+  generateOutline,
+  generateSlideMarkdownFromOutline,
+  generateStructuredOutline,
+  polishText,
+  suggestVisuals
+} from "../services/ai/gateway";
 
 describe("AI Gateway Fault Tolerance", () => {
   const mockConfig: AIConfig = {
     provider: "openai",
-    apiKey: "test-key",
     model: "gpt-4o-mini",
     temperature: 0.7
   };
@@ -62,5 +68,37 @@ describe("AI Gateway Fault Tolerance", () => {
       expect(content).toBeDefined();
       expect(Array.isArray(content)).toBe(true);
     }
+  });
+
+  it("should generate structured outline with theme template", async () => {
+    const result = await generateStructuredOutline(mockConfig, {
+      topic: "AI in Education",
+      pages: 3,
+      requirements: "强调案例与可执行性",
+      themeTemplate: "academic"
+    });
+
+    expect(result.topic).toBeDefined();
+    expect(result.themeTemplate).toBe("academic");
+    expect(result.slides.length).toBe(3);
+    expect(result.slides[0].title.length).toBeGreaterThan(0);
+    expect(result.slides[0].keyPoints.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("should generate markdown from a single outline page", async () => {
+    const markdown = await generateSlideMarkdownFromOutline(mockConfig, {
+      topic: "AI in Education",
+      themeTemplate: "business",
+      plan: {
+        index: 1,
+        title: "课程升级目标",
+        objective: "说明课程升级的目标和约束",
+        keyPoints: ["目标定义", "阶段计划", "评估指标"],
+        visualStrategy: "卡片 + 图标"
+      }
+    });
+
+    expect(markdown.startsWith("# ")).toBe(true);
+    expect(markdown.includes("- ")).toBe(true);
   });
 });

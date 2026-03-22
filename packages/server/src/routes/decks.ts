@@ -46,18 +46,37 @@ export async function deckRoutes(app: FastifyInstance): Promise<void> {
   app.put<{ Params: { deckId: string; slideId: string }; Body: { elements: ElementModel[] } }>(
     "/decks/:deckId/slides/:slideId/elements",
     async (request, reply) => {
+      const { deckId, slideId } = request.params;
       const payload = request.body as { elements: ElementModel[] };
+      
+      request.log.info({ deckId, slideId, elementCount: Array.isArray(payload.elements) ? payload.elements.length : 0 }, "Updating slide elements");
+      
       const slide = deckStore.replaceSlideElements(
-        request.params.deckId,
-        request.params.slideId,
+        deckId,
+        slideId,
         Array.isArray(payload.elements) ? payload.elements : []
       );
 
       if (!slide) {
+        request.log.warn({ deckId, slideId }, "Failed to find deck or slide");
         return reply.code(404).send({ message: "slide not found" });
       }
 
+      request.log.info({ deckId, slideId, elementCount: slide.elements.length }, "Slide elements updated successfully");
       return { slide };
+    }
+  );
+
+  app.delete<{ Params: { deckId: string; slideId: string } }>(
+    "/decks/:deckId/slides/:slideId",
+    async (request, reply) => {
+      const { deckId, slideId } = request.params;
+      const deck = deckStore.deleteSlide(deckId, slideId);
+      if (!deck) {
+        return reply.code(404).send({ message: "slide not found" });
+      }
+
+      return { deck };
     }
   );
 

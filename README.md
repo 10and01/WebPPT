@@ -142,6 +142,56 @@ npm run typecheck -w @web-ppt/shared
 
 - `WS /ws/collab?deckId=...&userId=...&userName=...&role=owner|editor|viewer`
 
+## 最小可运行示例（curl）
+
+先确保后端已启动（`http://localhost:4000`）。
+
+> 在 Windows PowerShell 中建议使用 `curl.exe`，避免与内置别名冲突。
+
+1. 健康检查
+
+```bash
+curl http://localhost:4000/health
+```
+
+2. 创建一个 deck
+
+```bash
+curl -X POST http://localhost:4000/api/decks \
+	-H "Content-Type: application/json" \
+	-d '{"title":"Demo Deck","createdBy":"demo-user"}'
+```
+
+3. 获取 deck 列表（从返回结果里复制 `deck.id`）
+
+```bash
+curl http://localhost:4000/api/decks
+```
+
+4. 将 `DECK_ID` 替换为真实值后，导入 Markdown 生成幻灯片
+
+```bash
+curl -X POST http://localhost:4000/api/decks/DECK_ID/import-markdown \
+	-H "Content-Type: application/json" \
+	-d '{"markdown":"# 业务复盘\n\n- 增长 25%\n- 成本下降 10%\n- 下一步聚焦留存"}'
+```
+
+5. 发起 HTML 导出任务
+
+```bash
+curl -X POST http://localhost:4000/api/exports \
+	-H "Content-Type: application/json" \
+	-d '{"deckId":"DECK_ID","format":"html"}'
+```
+
+6. 查询导出任务（将 `JOB_ID` 替换为上一步返回的 `job.id`）
+
+```bash
+curl http://localhost:4000/api/exports/JOB_ID
+```
+
+当状态为 `completed` 时，使用返回的 `outputPath` 下载结果。
+
 ## 导出功能注意事项
 
 PDF/PNG 导出依赖浏览器内核。若启动导出时报错，可任选一种方式：

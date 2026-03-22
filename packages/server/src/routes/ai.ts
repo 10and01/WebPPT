@@ -1,19 +1,96 @@
 import type { FastifyInstance } from "fastify";
+import { nanoid } from "nanoid";
 import type {
+  AISlideEditRequest,
+  AIToolPolicy,
+  AIConfig,
+  ElementModel,
+  GenerateDeckFromOutlineRequest,
   GenerateDeckRequest,
   ImportMarkdownRequest,
-  PolishTextRequest
+  PolishTextRequest,
+  Slide,
+  DeckThemeTemplate
 } from "@web-ppt/shared";
 import { deckStore } from "../data/deck-store";
 import {
   generateDeckDraft,
+  generateSlideMarkdownFromOutline,
+  generateStructuredOutline,
+  rewriteSlideMarkdown,
+  generateRichMarkdown,
   polishText,
   suggestVisuals,
   generateOutline,
-  generatePaginatedCopy
+  generatePaginatedCopy,
+  testAIConnection
 } from "../services/ai/gateway";
+import {
+  appendSlideMarkdown,
+  overwriteSlideMarkdownBySlideId,
+  readSlideMarkdownBySlideId
+} from "../services/markdown/page-tools";
+
+const DEFAULT_SLIDE_BG = "#ffffff";
+const BEAUTIFIED_BG = "#eef6ff";
+
+function normalizeToolPolicy(input?: AIToolPolicy): AIToolPolicy {
+  const defaults: AIToolPolicy = {
+    allowedTools: ["generate-outline", "read-slide-markdown", "overwrite-slide-markdown", "append-slide-markdown"]
+  };
+
+  if (!input?.allowedTools?.length) {
+    return defaults;
+  }
+
+  return {
+    allowedTools: input.allowedTools
+  };
+}
+
+function buildAiImageElement(slideId: string, promptText: string, zIndex: number): ElementModel {
+  const encodedPrompt = encodeURIComponent(promptText || "presentation background");
+  return {
+    id: nanoid(),
+    slideId,
+    type: "image",
+    x: 500,
+    y: 120,
+    width: 300,
+    height: 200,
+    rotate: 0,
+    zIndex,
+    content: {
+      src: `https://picsum.photos/seed/${encodedPrompt}/800/500`,
+      alt: promptText || "AI suggested image"
+    },
+    style: {
+      fill: "#e2e8f0",
+      stroke: "#94a3b8",
+      strokeWidth: 1,
+      opacity: 1,
+      borderRadius: 10
+    }
+  };
+}
 
 export async function aiRoutes(app: FastifyInstance): Promise<void> {
+  app.post<{ Body: { aiConfig: AIConfig } }>("/ai/test-connection", async (request, reply) => {
+    try {
+      const payload = request.body as { aiConfig: AIConfig };
+      const result = await testAIConnection(payload.aiConfig);
+      return {
+        ok: true,
+        provider: result.provider,
+        model: result.model,
+        message: `Connection OK (${result.provider}/${result.model})`
+      };
+    } catch (error) {
+      request.log.error(error, "AI connection test failed");
+      return reply.code(502).send({ message: `AI connection test failed: ${(error as Error).message}` });
+    }
+  });
+
   app.post<{ Params: { deckId: string }; Body: GenerateDeckRequest }>(
     "/ai/decks/:deckId/generate",
     async (request, reply) => {
@@ -97,5 +174,170 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const { topic, outline, slideIndex } = request.body;
     const content = await generatePaginatedCopy(deck.aiConfig, topic, outline, slideIndex);
     return { content };
+  });
+
+  app.post<{
+    Params: { deckId: string };
+    Body: { topic: string; requirements: string };
+  }>("/ai/decks/:deckId/generate-markdown", async (request, reply) => {
+    try {
+      const deck = deckStore.getById(request.params.deckId);
+      if (!deck) {
+        return reply.code(404).send({ message: "deck not found" });
+      }
+
+      const { topic, requirements } = request.body;
+      const markdown = await generateRichMarkdown(deck.aiConfig, topic, requirements);
+      return { markdown };
+    } catch (error) {
+      request.log.error(error, "AI generate markdown failed");
+      return reply.code(502).send({ message: `AI generate markdown failed: ${(error as Error).message}` });
+    }
+  });
+
+  app.post<{
+    Params: { deckId: string };
+    Body: GenerateDeckFromOutlineRequest;
+  }>("/ai/decks/:deckId/generate-by-outline", async (request, reply) => {
+    try {
+      const deck = deckStore.getById(request.params.deckId);
+      if (!deck) {
+        return reply.code(404).send({ message: "deck not found" });
+      }
+
+      const payload = request.body as GenerateDeckFromOutlineRequest;
+      const topic = payload.topic?.trim();
+      if (!topic) {
+        return reply.code(400).send({ message: "topic is required" });
+      }
+
+      const pages = Math.max(1, Math.min(payload.pages || 1, 30));
+      const themeTemplate: DeckThemeTemplate = payload.themeTemplate || "business";
+      const toolPolicy = normalizeToolPolicy(payload.toolPolicy);
+      if (!toolPolicy.allowedTools.includes("generate-outline")) {
+        return reply.code(400).send({ message: "tool policy must allow generate-outline" });
+      }
+      if (!toolPolicy.allowedTools.includes("append-slide-markdown")) {
+        return reply.code(400).send({ message: "tool policy must allow append-slide-markdown" });
+      }
+
+      const outline = await generateStructuredOutline(deck.aiConfig, {
+        topic,
+        pages,
+        requirements: payload.requirements,
+        themeTemplate
+      });
+
+      const createdSlides: Array<{ slideId: string; slideNumber: number; title: string; markdown: string }> = [];
+      for (const plan of outline.slides) {
+        const markdown = await generateSlideMarkdownFromOutline(deck.aiConfig, {
+          topic,
+          plan,
+          themeTemplate
+        });
+
+        const appended = appendSlideMarkdown(deck.id, {
+          markdown,
+          title: plan.title
+        });
+
+        if (!appended) {
+          return reply.code(500).send({ message: "failed to append generated slide markdown" });
+        }
+
+        createdSlides.push({
+          slideId: appended.slide.id,
+          slideNumber: appended.slide.slideNumber,
+          title: appended.slide.title,
+          markdown: appended.markdown
+        });
+      }
+
+      const latest = deckStore.getById(deck.id);
+      if (!latest) {
+        return reply.code(500).send({ message: "deck update failed" });
+      }
+
+      return {
+        outline,
+        slides: createdSlides,
+        deck: latest
+      };
+    } catch (error) {
+      request.log.error(error, "AI outline pipeline failed");
+      return reply.code(502).send({ message: `AI outline pipeline failed: ${(error as Error).message}` });
+    }
+  });
+
+  app.post<{
+    Params: { deckId: string; slideId: string };
+    Body: AISlideEditRequest;
+  }>("/ai/decks/:deckId/slides/:slideId/rewrite", async (request, reply) => {
+    try {
+      const deck = deckStore.getById(request.params.deckId);
+      if (!deck) {
+        return reply.code(404).send({ message: "deck not found" });
+      }
+
+      const slide = deck.slides.find((item) => item.id === request.params.slideId);
+      if (!slide) {
+        return reply.code(404).send({ message: "slide not found" });
+      }
+
+      const payload = request.body as AISlideEditRequest;
+      if (!payload.instruction?.trim()) {
+        return reply.code(400).send({ message: "instruction is required" });
+      }
+
+      const current = readSlideMarkdownBySlideId(deck.id, slide.id);
+      if (!current) {
+        return reply.code(404).send({ message: "slide not found" });
+      }
+
+      const currentMarkdown = current.markdown;
+      const markdown = await rewriteSlideMarkdown(deck.aiConfig, {
+        topic: deck.title,
+        currentMarkdown,
+        instruction: payload.instruction.trim()
+      });
+      const instruction = payload.instruction;
+      const overwritten = overwriteSlideMarkdownBySlideId(deck.id, slide.id, markdown);
+      if (!overwritten) {
+        return reply.code(500).send({ message: "failed to overwrite slide markdown" });
+      }
+
+      const rewrittenSlide = overwritten.slide;
+
+      const shouldAddImage = /图片|image|配图/i.test(instruction);
+      const shouldBeautifyBg = /背景|bg|background|美化/i.test(instruction);
+      const imageHint = (markdown.match(/\[图片建议:\s*([^\]]+)\]/)?.[1] || instruction).trim();
+
+      const nextElements = rewrittenSlide.elements.map((element, index) => ({
+        ...element,
+        zIndex: index + 1
+      }));
+
+      if (shouldAddImage) {
+        nextElements.push(buildAiImageElement(slide.id, imageHint, nextElements.length + 1));
+      }
+
+      const updatedSlide: Slide = {
+        ...rewrittenSlide,
+        bgColor: shouldBeautifyBg ? BEAUTIFIED_BG : rewrittenSlide.bgColor || DEFAULT_SLIDE_BG,
+        elements: nextElements,
+        updatedAt: Date.now()
+      };
+
+      const nextDeck = {
+        ...deck,
+        slides: deck.slides.map((item) => (item.id === slide.id ? updatedSlide : item))
+      };
+
+      const merged = deckStore.overwriteDeck(deck.id, nextDeck);
+      return { markdown, deck: merged };
+    } catch (error) {
+      request.log.error(error, "AI rewrite slide failed");
+      return reply.code(502).send({ message: `AI rewrite slide failed: ${(error as Error).message}` });
+    }
   });
 }

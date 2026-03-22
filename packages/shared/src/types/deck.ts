@@ -131,6 +131,79 @@ export interface ImportMarkdownRequest {
   markdown: string;
 }
 
+export interface SlideMarkdownReadResponse {
+  deckId: string;
+  slideId: string;
+  slideNumber: number;
+  markdown: string;
+  title: string;
+}
+
+export interface OverwriteSlideMarkdownRequest {
+  markdown: string;
+}
+
+export interface AppendSlideMarkdownRequest {
+  markdown: string;
+  title?: string;
+}
+
+export type DeckThemeTemplate = "business" | "academic" | "product-launch";
+
+export interface AIToolPolicy {
+  allowedTools: Array<"read-slide-markdown" | "overwrite-slide-markdown" | "append-slide-markdown" | "generate-outline">;
+}
+
+export interface OutlineSlidePlan {
+  index: number;
+  title: string;
+  objective: string;
+  keyPoints: string[];
+  visualStrategy: string;
+}
+
+export interface GenerateStructuredOutlineRequest {
+  topic: string;
+  pages: number;
+  requirements?: string;
+  themeTemplate?: DeckThemeTemplate;
+}
+
+export interface GenerateStructuredOutlineResponse {
+  topic: string;
+  themeTemplate: DeckThemeTemplate;
+  slides: OutlineSlidePlan[];
+}
+
+export interface GenerateSlideMarkdownFromOutlineRequest {
+  topic: string;
+  plan: OutlineSlidePlan;
+  themeTemplate?: DeckThemeTemplate;
+}
+
+export interface GenerateDeckFromOutlineRequest {
+  topic: string;
+  pages: number;
+  requirements?: string;
+  themeTemplate?: DeckThemeTemplate;
+  toolPolicy?: AIToolPolicy;
+}
+
+export interface GenerateDeckFromOutlineResponse {
+  outline: GenerateStructuredOutlineResponse;
+  slides: Array<{
+    slideId: string;
+    slideNumber: number;
+    title: string;
+    markdown: string;
+  }>;
+  deck: Deck;
+}
+
+export interface AISlideEditRequest {
+  instruction: string;
+}
+
 export interface ExportDeckRequest {
   deckId: string;
   format: "html" | "pdf" | "png" | "pptx";

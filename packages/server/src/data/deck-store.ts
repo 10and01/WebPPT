@@ -69,6 +69,29 @@ export const deckStore = {
     return slide;
   },
 
+  deleteSlide(deckId: string, slideId: string): Deck | undefined {
+    const deck = decks.get(deckId);
+    if (!deck) {
+      return undefined;
+    }
+
+    const nextSlides = deck.slides.filter((slide) => slide.id !== slideId);
+    if (nextSlides.length === deck.slides.length) {
+      return undefined;
+    }
+
+    const updatedAt = now();
+    deck.slides = nextSlides.map((slide, index) => ({
+      ...slide,
+      slideNumber: index + 1,
+      updatedAt
+    }));
+    deck.updatedAt = updatedAt;
+    deck.version += 1;
+
+    return deck;
+  },
+
   replaceSlideElements(deckId: string, slideId: string, elements: ElementModel[]): Slide | undefined {
     const deck = decks.get(deckId);
     if (!deck) {

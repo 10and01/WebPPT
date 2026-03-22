@@ -1,8 +1,19 @@
 import { nanoid } from "nanoid";
 import type { FastifyInstance } from "fastify";
 import { marked } from "marked";
-import type { ElementModel, ImportMarkdownRequest, Slide } from "@web-ppt/shared";
+import type {
+  AppendSlideMarkdownRequest,
+  ImportMarkdownRequest,
+  OverwriteSlideMarkdownRequest,
+  Slide,
+  ElementModel
+} from "@web-ppt/shared";
 import { deckStore } from "../data/deck-store";
+import {
+  appendSlideMarkdown,
+  overwriteSlideMarkdown,
+  readSlideMarkdown
+} from "../services/markdown/page-tools";
 
 const PAGE_TOP = 120;
 const PAGE_BOTTOM = 520;
@@ -198,6 +209,72 @@ function makeTableElements(slideId: string, header: string[], rows: string[][], 
 }
 
 export async function markdownRoutes(app: FastifyInstance): Promise<void> {
+  app.get<{ Params: { deckId: string; pageNumber: string } }>(
+    "/decks/:deckId/pages/:pageNumber/markdown",
+    async (request, reply) => {
+      const pageNumber = Number(request.params.pageNumber);
+      if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+        return reply.code(400).send({ message: "pageNumber must be a positive integer" });
+      }
+
+      const result = readSlideMarkdown(request.params.deckId, pageNumber);
+      if (!result) {
+        return reply.code(404).send({ message: "slide not found" });
+      }
+
+      return result;
+    }
+  );
+
+  app.put<{ Params: { deckId: string; pageNumber: string }; Body: OverwriteSlideMarkdownRequest }>(
+    "/decks/:deckId/pages/:pageNumber/markdown",
+    async (request, reply) => {
+      const pageNumber = Number(request.params.pageNumber);
+      if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+        return reply.code(400).send({ message: "pageNumber must be a positive integer" });
+      }
+
+      const payload = request.body as OverwriteSlideMarkdownRequest;
+      if (!payload.markdown?.trim()) {
+        return reply.code(400).send({ message: "markdown is required" });
+      }
+
+      const updated = overwriteSlideMarkdown(request.params.deckId, pageNumber, payload.markdown);
+      if (!updated) {
+        return reply.code(404).send({ message: "slide not found" });
+      }
+
+      return {
+        pageNumber,
+        slideId: updated.slide.id,
+        markdown: updated.markdown,
+        deck: updated.deck
+      };
+    }
+  );
+
+  app.post<{ Params: { deckId: string }; Body: AppendSlideMarkdownRequest }>(
+    "/decks/:deckId/pages/append-markdown",
+    async (request, reply) => {
+      const payload = request.body as AppendSlideMarkdownRequest;
+      if (!payload.markdown?.trim()) {
+        return reply.code(400).send({ message: "markdown is required" });
+      }
+
+      const appended = appendSlideMarkdown(request.params.deckId, payload);
+      if (!appended) {
+        return reply.code(404).send({ message: "deck not found" });
+      }
+
+      return reply.code(201).send({
+        slideId: appended.slide.id,
+        pageNumber: appended.slide.slideNumber,
+        markdown: appended.markdown,
+        deck: appended.deck
+      });
+    }
+  );
+
   app.post<{ Params: { deckId: string }; Body: ImportMarkdownRequest }>(
     "/decks/:deckId/import-markdown",
     async (request, reply) => {

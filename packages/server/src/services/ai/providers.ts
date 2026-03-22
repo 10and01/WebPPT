@@ -1,8 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
+export interface AIProviderGenerateOptions {
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  jsonSchema?: Record<string, unknown>;
+}
+
 export interface AIProvider {
-  generate(prompt: string, options?: { model?: string; temperature?: number; maxTokens?: number }): Promise<string>;
+  generate(prompt: string, options?: AIProviderGenerateOptions): Promise<string>;
 }
 
 function normalizeOpenAIContent(content: unknown): string {
@@ -18,8 +25,21 @@ function normalizeOpenAIContent(content: unknown): string {
         }
 
         if (item && typeof item === "object") {
-          const typed = item as { type?: string; text?: string };
-          if (typed.type === "text" && typeof typed.text === "string") {
+          const typed = item as { type?: string; text?: unknown };
+          if (typed.type === "text") {
+            if (typeof typed.text === "string") {
+              return typed.text;
+            }
+
+            if (typed.text && typeof typed.text === "object") {
+              const nested = typed.text as { value?: string };
+              if (typeof nested.value === "string") {
+                return nested.value;
+              }
+            }
+          }
+
+          if (typeof typed.text === "string") {
             return typed.text;
           }
         }
@@ -31,6 +51,67 @@ function normalizeOpenAIContent(content: unknown): string {
   }
 
   return "";
+}
+
+function collectReadableText(value: unknown): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectReadableText(item));
+  }
+
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  const typed = value as {
+    text?: unknown;
+    output_text?: unknown;
+    completion?: unknown;
+    content?: unknown;
+    message?: { content?: unknown };
+    delta?: { text?: unknown };
+    value?: unknown;
+  };
+
+  const chunks: string[] = [];
+
+  if (typeof typed.text === "string") {
+    chunks.push(typed.text);
+  }
+
+  if (typeof typed.output_text === "string") {
+    chunks.push(typed.output_text);
+  }
+
+  if (typeof typed.completion === "string") {
+    chunks.push(typed.completion);
+  }
+
+  if (typeof typed.delta?.text === "string") {
+    chunks.push(typed.delta.text);
+  }
+
+  if (typeof typed.value === "string") {
+    chunks.push(typed.value);
+  }
+
+  if (typed.text && typeof typed.text === "object") {
+    chunks.push(...collectReadableText(typed.text));
+  }
+
+  if (typed.content !== undefined) {
+    chunks.push(...collectReadableText(typed.content));
+  }
+
+  if (typed.message?.content !== undefined) {
+    chunks.push(...collectReadableText(typed.message.content));
+  }
+
+  return chunks.map((chunk) => chunk.trim()).filter(Boolean);
 }
 
 function extractOpenAIResponseText(response: unknown): string {
@@ -62,6 +143,66 @@ function extractOpenAIResponseText(response: unknown): string {
     .trim();
 }
 
+function extractAnthropicResponseText(response: unknown): string {
+  if (!response || typeof response !== "object") {
+    return "";
+  }
+
+  const typed = response as {
+    completion?: string;
+    content?: unknown;
+    output_text?: string;
+    choices?: Array<{ message?: { content?: unknown } }>;
+  };
+
+  if (typeof typed.completion === "string" && typed.completion.trim()) {
+    return typed.completion.trim();
+  }
+
+  if (typeof typed.output_text === "string" && typed.output_text.trim()) {
+    return typed.output_text.trim();
+  }
+
+  if (typeof typed.content === "string" && typed.content.trim()) {
+    return typed.content.trim();
+  }
+
+  if (Array.isArray(typed.content)) {
+    const text = typed.content
+      .map((block) => {
+        if (typeof block === "string") {
+          return block;
+        }
+
+        if (block && typeof block === "object") {
+          const typedBlock = block as { type?: string; text?: string };
+          if (
+            (typedBlock.type === "text" || typedBlock.type === "output_text") &&
+            typeof typedBlock.text === "string"
+          ) {
+            return typedBlock.text;
+          }
+        }
+
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  const recursiveText = collectReadableText(response).join("\n").trim();
+  if (recursiveText) {
+    return recursiveText;
+  }
+
+  return normalizeOpenAIContent(typed.choices?.[0]?.message?.content).trim();
+}
+
 export class OpenAIProvider implements AIProvider {
   private client: OpenAI;
 
@@ -69,10 +210,7 @@ export class OpenAIProvider implements AIProvider {
     this.client = new OpenAI({ apiKey, baseURL: endpoint });
   }
 
-  async generate(
-    prompt: string,
-    options?: { model?: string; temperature?: number; maxTokens?: number }
-  ): Promise<string> {
+  async generate(prompt: string, options?: AIProviderGenerateOptions): Promise<string> {
     // Use OpenAI Responses API shape from official docs.
     const response = await this.client.responses.create({
       model: options?.model ?? "gpt-4o-mini",
@@ -108,12 +246,9 @@ export class AnthropicProvider implements AIProvider {
     this.client = new Anthropic({ apiKey, baseURL: endpoint });
   }
 
-  async generate(
-    prompt: string,
-    options?: { model?: string; temperature?: number; maxTokens?: number }
-  ): Promise<string> {
+  async generate(prompt: string, options?: AIProviderGenerateOptions): Promise<string> {
     // Use Anthropic Messages API shape from official docs.
-    const completion = await this.client.messages.create({
+    const request = {
       model: options?.model ?? "claude-3-5-haiku-20241022",
       max_tokens: options?.maxTokens ?? 800,
       temperature: options?.temperature ?? 0.7,
@@ -127,19 +262,67 @@ export class AnthropicProvider implements AIProvider {
             }
           ]
         }
-      ]
-    });
+      ],
+      ...(options?.jsonSchema
+        ? {
+            output_config: {
+              format: {
+                type: "json_schema",
+                schema: options.jsonSchema
+              }
+            }
+          }
+        : {})
+    } as unknown as Parameters<Anthropic["messages"]["create"]>[0];
 
-    return completion.content
-      .map((block) => (block.type === "text" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n")
-      .trim();
+    const completion = await this.client.messages.create(request);
+
+    const text = extractAnthropicResponseText(completion);
+    if (text) {
+      return text;
+    }
+
+    throw new Error("Anthropic response contained no readable text content");
   }
 }
 
 export class MockProvider implements AIProvider {
   async generate(prompt: string): Promise<string> {
+    if (prompt.includes("STRUCTURED_OUTLINE_JSON")) {
+      return JSON.stringify({
+        topic: "AI Draft Topic",
+        slides: [
+          {
+            index: 1,
+            title: "背景与目标",
+            objective: "说明议题背景并明确目标",
+            keyPoints: ["行业背景", "痛点定义", "目标范围"],
+            visualStrategy: "时间线 + 图标"
+          },
+          {
+            index: 2,
+            title: "方案路径",
+            objective: "给出可执行路径",
+            keyPoints: ["关键动作", "里程碑", "风险控制"],
+            visualStrategy: "流程图"
+          },
+          {
+            index: 3,
+            title: "结果与行动",
+            objective: "总结收益与下一步",
+            keyPoints: ["预期收益", "资源需求", "下一步计划"],
+            visualStrategy: "对比卡片"
+          }
+        ]
+      });
+    }
+
+    if (prompt.includes("SLIDE_MARKDOWN_FROM_OUTLINE")) {
+      const titleMatch = prompt.match(/页标题:\s*(.+)/);
+      const title = titleMatch?.[1]?.trim() || "AI Slide";
+      return `# ${title}\n\n- 关键要点一\n- 关键要点二\n- 关键要点三`;
+    }
+
     if (prompt.includes("VISUAL_JSON")) {
       return JSON.stringify([
         { type: "bar-chart", hint: "Use a 5-year trend chart", color: "blue" },
@@ -188,6 +371,18 @@ export class MockProvider implements AIProvider {
           }
         ]
       });
+    }
+
+    if (prompt.includes("PPT单页改写助手")) {
+      return [
+        "# 优化后的关键结论",
+        "",
+        "- 用更清晰的结构表达核心观点",
+        "- 用一组关键数据支撑结论",
+        "- 明确下一步行动和负责人",
+        "",
+        "[图片建议: 一张与主题相关的横版配图]"
+      ].join("\n");
     }
 
     return [

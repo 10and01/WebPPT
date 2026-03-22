@@ -1,18 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { nanoid } from "nanoid";
-import type { CollaboratorPresence, Deck, ElementModel, Slide } from "@web-ppt/shared";
+import { marked } from "marked";
+import type { CollaboratorPresence, Deck, DeckThemeTemplate, ElementModel, Slide } from "@web-ppt/shared";
 import {
   addSlide,
   createDeck,
-  generateDeckDraft,
+  deleteSlide,
+  generateDeckByOutline,
   getExportJob,
   importMarkdown,
   listDecks,
   polishSelectedText,
   replaceSlideElements,
+  rewriteSlideWithAI,
   startExport,
   suggestVisuals,
+  testAIConnection,
   updateAIConfig
 } from "./services/api";
 import { createCollabClient, readDeckFromDoc } from "./services/collab";
@@ -29,11 +33,15 @@ const codeChecksum = ref("");
 const canvasChecksum = ref("");
 const conflictMessage = ref("");
 const markdownInput = ref("# 数据分析报告\n\n- 结论一\n- 结论二");
+const aiGenerateRequirements = ref("主标题：\n副标题：\n主要内容点（每行一个）");
+const aiSlideInstruction = ref("请在当前页添加一张图片并美化背景，保持内容专业简洁");
 const aiTopic = ref("介绍碳中和的商业模式");
+const aiThemeTemplate = ref<DeckThemeTemplate>("business");
 const aiProvider = ref<"openai" | "anthropic">("openai");
 const aiModel = ref("gpt-4.1-mini");
 const aiApiKey = ref("");
 const aiApiEndpoint = ref("");
+const aiTestMessage = ref("");
 const visualHints = ref<string[]>([]);
 const collabEnabled = ref(false);
 const role = ref<"editor" | "viewer">("editor");
@@ -46,6 +54,55 @@ const uploadInputRef = ref<HTMLInputElement | null>(null);
 let collabClient: ReturnType<typeof createCollabClient> | null = null;
 let codeDebounce: ReturnType<typeof setTimeout> | null = null;
 let saveDebounce: ReturnType<typeof setTimeout> | null = null;
+
+const AI_SETTINGS_STORAGE_KEY = "webppt.ai.settings.v1";
+
+type PersistedAISettings = {
+  provider: "openai" | "anthropic";
+  model: string;
+  apiEndpoint: string;
+  apiKey: string;
+};
+
+function readPersistedAISettings(): PersistedAISettings | null {
+  try {
+    const raw = localStorage.getItem(AI_SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<PersistedAISettings>;
+    const provider = parsed.provider === "anthropic" ? "anthropic" : "openai";
+    return {
+      provider,
+      model: typeof parsed.model === "string" ? parsed.model : "",
+      apiEndpoint: typeof parsed.apiEndpoint === "string" ? parsed.apiEndpoint : "",
+      apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : ""
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistAISettings() {
+  const payload: PersistedAISettings = {
+    provider: aiProvider.value,
+    model: aiModel.value,
+    apiEndpoint: aiApiEndpoint.value,
+    apiKey: aiApiKey.value
+  };
+
+  localStorage.setItem(AI_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function getPreferredAIConfig() {
+  return {
+    provider: aiProvider.value,
+    model: aiModel.value.trim() || undefined,
+    apiKey: aiApiKey.value.trim() || undefined,
+    apiEndpoint: aiApiEndpoint.value.trim() || undefined
+  };
+}
 
 function hashText(text: string): string {
   let h = 0;
@@ -60,6 +117,13 @@ const activeDeck = computed(() => decks.value.find((deck) => deck.id === activeD
 const activeSlide = computed(
   () => activeDeck.value?.slides.find((slide) => slide.id === activeSlideId.value) || null
 );
+const markdownPreviewHtml = computed(() => {
+  try {
+    return marked.parse(markdownInput.value || "") as string;
+  } catch {
+    return "<p>Markdown parse failed.</p>";
+  }
+});
 const selectedElement = computed(
   () => activeSlide.value?.elements.find((element) => element.id === selectedElementId.value) || null
 );
@@ -67,15 +131,23 @@ const selectedElement = computed(
 watch(
   activeDeck,
   (deck) => {
-    aiProvider.value = (deck?.aiConfig.provider === "anthropic" ? "anthropic" : "openai") as
-      | "openai"
-      | "anthropic";
-    aiModel.value = deck?.aiConfig.model || (aiProvider.value === "anthropic" ? "claude-3-5-haiku-20241022" : "gpt-4.1-mini");
-    aiApiEndpoint.value = deck?.aiConfig.apiEndpoint || "";
-    aiApiKey.value = deck?.aiConfig.apiKey || "";
+    const persisted = readPersistedAISettings();
+    const provider = (deck?.aiConfig.provider === "anthropic" ? "anthropic" : "openai") as "openai" | "anthropic";
+    const modelFallback = provider === "anthropic" ? "claude-3-5-haiku-20241022" : "gpt-4.1-mini";
+
+    aiProvider.value = provider;
+    aiModel.value = deck?.aiConfig.model || persisted?.model || modelFallback;
+    aiApiEndpoint.value = deck?.aiConfig.apiEndpoint || persisted?.apiEndpoint || "";
+    aiApiKey.value = deck?.aiConfig.apiKey || persisted?.apiKey || "";
+
+    aiTestMessage.value = "";
   },
   { immediate: true }
 );
+
+watch([aiProvider, aiModel, aiApiEndpoint, aiApiKey], () => {
+  persistAISettings();
+});
 
 type ShapeKind = "rect" | "roundRect" | "circle" | "triangle" | "diamond";
 
@@ -112,6 +184,31 @@ function ensureSelectedSlide() {
   if (!activeSlide.value) {
     activeSlideId.value = activeDeck.value.slides[0].id;
   }
+}
+
+function clearPendingEditTimers() {
+  if (codeDebounce) {
+    clearTimeout(codeDebounce);
+    codeDebounce = null;
+  }
+
+  if (saveDebounce) {
+    clearTimeout(saveDebounce);
+    saveDebounce = null;
+  }
+}
+
+function replaceDeckLocally(deck: Deck) {
+  const idx = decks.value.findIndex((item) => item.id === deck.id);
+  if (idx >= 0) {
+    decks.value[idx] = deck;
+  } else {
+    decks.value.unshift(deck);
+  }
+
+  activeDeckId.value = deck.id;
+  activeSlideId.value = deck.slides[0]?.id || "";
+  selectedElementId.value = "";
 }
 
 async function loadDecks() {
@@ -188,13 +285,22 @@ async function maybeSaveElements() {
     return;
   }
 
+  const scheduledDeckId = activeDeck.value.id;
+  const scheduledSlideId = activeSlide.value.id;
+
   if (saveDebounce) {
     clearTimeout(saveDebounce);
   }
 
   saveDebounce = setTimeout(async () => {
     try {
-      await replaceSlideElements(activeDeck.value!.id, activeSlide.value!.id, activeSlide.value!.elements);
+      const latestDeck = decks.value.find((deck) => deck.id === scheduledDeckId);
+      const latestSlide = latestDeck?.slides.find((slide) => slide.id === scheduledSlideId);
+      if (!latestDeck || !latestSlide) {
+        return;
+      }
+
+      await replaceSlideElements(latestDeck.id, latestSlide.id, latestSlide.elements);
     } catch (err) {
       error.value = (err as Error).message;
     }
@@ -203,7 +309,13 @@ async function maybeSaveElements() {
 
 async function onCreateDeck() {
   try {
-    const deck = await createDeck({ title: `Deck ${decks.value.length + 1}`, createdBy: currentUserId });
+    let deck = await createDeck({ title: `Deck ${decks.value.length + 1}`, createdBy: currentUserId });
+
+    const preferredConfig = getPreferredAIConfig();
+    if (preferredConfig.apiKey || preferredConfig.apiEndpoint || preferredConfig.model) {
+      deck = await updateAIConfig(deck.id, preferredConfig);
+    }
+
     decks.value.unshift(deck);
     activeDeckId.value = deck.id;
     selectedElementId.value = "";
@@ -513,50 +625,30 @@ async function onAIGenerate() {
     return;
   }
 
-  status.value = "ai-generating";
+  status.value = "ai-outline-generating";
   try {
-    const data = await generateDeckDraft(activeDeck.value.id, { topic: aiTopic.value, slides: 5 });
-    const newSlides: Slide[] = data.draft.slideDrafts.map((item, index) => {
-      const id = nanoid();
-      const bulletLines = extractBulletLinesFromMarkdown(item.markdown);
-      const displayBullets = bulletLines.length ? bulletLines : item.bullets;
-
-      const elements: ElementModel[] = displayBullets.map((bullet, bIndex) => ({
-        id: nanoid(),
-        slideId: id,
-        type: "text",
-        x: 90,
-        y: 180 + bIndex * 56,
-        width: 740,
-        height: 48,
-        rotate: 0,
-        zIndex: bIndex + 1,
-        content: { text: `• ${bullet}` },
-        style: makeDefaultStyle()
-      }));
-
-      return {
-        id,
-        deckId: activeDeck.value!.id,
-        slideNumber: index + 1,
-        title: item.title,
-        bgColor: item.bgColor || "#ffffff",
-        elements,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      };
+    const generated = await generateDeckByOutline(activeDeck.value.id, {
+      topic: aiTopic.value,
+      pages: 6,
+      requirements: aiGenerateRequirements.value,
+      themeTemplate: aiThemeTemplate.value,
+      toolPolicy: {
+        allowedTools: ["generate-outline", "append-slide-markdown", "read-slide-markdown", "overwrite-slide-markdown"]
+      }
     });
 
-    activeDeck.value.slides = newSlides;
-    activeSlideId.value = newSlides[0]?.id || "";
+    markdownInput.value = generated.slides.map((slide) => slide.markdown).join("\n\n---\n\n");
+    clearPendingEditTimers();
+    replaceDeckLocally(generated.deck);
+
     visualHints.value = await (async () => {
-      const v = await suggestVisuals(activeDeck.value!.id, aiTopic.value);
+      const v = await suggestVisuals(activeDeck.value!.id, markdownInput.value);
       return v.suggestions;
     })();
-    status.value = "ai-done";
+    status.value = "ai-outline-imported";
   } catch (err) {
     error.value = (err as Error).message;
-    status.value = "ai-failed";
+    status.value = "ai-outline-failed";
   }
 }
 
@@ -567,10 +659,7 @@ async function onSaveAIConfig() {
 
   try {
     const deck = await updateAIConfig(activeDeck.value.id, {
-      provider: aiProvider.value,
-      model: aiModel.value.trim() || undefined,
-      apiKey: aiApiKey.value.trim() || undefined,
-      apiEndpoint: aiApiEndpoint.value.trim() || undefined
+      ...getPreferredAIConfig()
     });
 
     const idx = decks.value.findIndex((item) => item.id === deck.id);
@@ -579,8 +668,22 @@ async function onSaveAIConfig() {
     }
 
     status.value = "ai-config-saved";
+    aiTestMessage.value = "";
   } catch (err) {
     error.value = (err as Error).message;
+  }
+}
+
+async function onTestAIConnection() {
+  try {
+    aiTestMessage.value = "Testing...";
+    const result = await testAIConnection(getPreferredAIConfig());
+    aiTestMessage.value = result.message;
+    status.value = "ai-connected";
+  } catch (err) {
+    const message = (err as Error).message;
+    aiTestMessage.value = message;
+    error.value = message;
   }
 }
 
@@ -610,15 +713,61 @@ async function onImportMarkdown() {
     return;
   }
   try {
+    clearPendingEditTimers();
     const deck = await importMarkdown(activeDeck.value.id, { markdown: markdownInput.value });
-    const idx = decks.value.findIndex((item) => item.id === deck.id);
-    if (idx >= 0) {
-      decks.value[idx] = deck;
-      activeSlideId.value = deck.slides[0]?.id || "";
-    }
+    replaceDeckLocally(deck);
   } catch (err) {
     error.value = (err as Error).message;
   }
+}
+
+async function onRewriteSelectedSlideWithAI() {
+  if (!activeDeck.value || !activeSlide.value) {
+    return;
+  }
+
+  const instruction = aiSlideInstruction.value.trim();
+  if (!instruction) {
+    error.value = "请输入当前页的AI修改要求。";
+    return;
+  }
+
+  try {
+    status.value = "ai-rewriting-slide";
+    const result = await rewriteSlideWithAI(activeDeck.value.id, activeSlide.value.id, { instruction });
+    markdownInput.value = result.markdown;
+    replaceDeckLocally(result.deck);
+    status.value = "ai-slide-updated";
+  } catch (err) {
+    error.value = (err as Error).message;
+    status.value = "ai-slide-failed";
+  }
+}
+
+async function onDeleteActiveSlide() {
+  if (!activeDeck.value || !activeSlide.value) {
+    return;
+  }
+
+  if (role.value === "viewer") {
+    error.value = "Viewer cannot edit.";
+    return;
+  }
+
+  try {
+    const nextDeck = await deleteSlide(activeDeck.value.id, activeSlide.value.id);
+    replaceDeckLocally(nextDeck);
+    ensureSelectedSlide();
+  } catch (err) {
+    error.value = (err as Error).message;
+  }
+}
+
+async function onGenerateAndImportMarkdown() {
+  if (!activeDeck.value) {
+    return;
+  }
+  await onAIGenerate();
 }
 
 async function onExport(format: "html" | "pdf" | "pptx") {
@@ -711,11 +860,15 @@ onBeforeUnmount(() => {
 <template>
   <div class="layout">
     <aside class="left-panel">
+      <div style="background: #ff0000; color: #fff; padding: 8px; margin-bottom: 16px; border-radius: 4px; font-weight: bold;">✓ App Loaded</div>
       <h2>Decks</h2>
       <div class="row">
         <button @click="onCreateDeck">New Deck</button>
         <button @click="onAddSlide" :disabled="!activeDeck">Add Slide</button>
       </div>
+      <button @click="onDeleteActiveSlide" :disabled="!activeDeck || !activeSlide || role === 'viewer'">
+        Delete Selected Slide
+      </button>
       <select v-model="activeDeckId" @change="ensureSelectedSlide">
         <option v-for="deck in decks" :key="deck.id" :value="deck.id">{{ deck.title }}</option>
       </select>
@@ -744,6 +897,13 @@ onBeforeUnmount(() => {
         <label>Model</label>
         <input v-model="aiModel" placeholder="gpt-4.1-mini / claude-3-5-haiku-20241022" />
 
+        <label>Theme Template</label>
+        <select v-model="aiThemeTemplate">
+          <option value="business">Business</option>
+          <option value="academic">Academic</option>
+          <option value="product-launch">Product Launch</option>
+        </select>
+
         <label>API Key</label>
         <input v-model="aiApiKey" placeholder="输入 API Key" type="password" />
 
@@ -758,13 +918,33 @@ onBeforeUnmount(() => {
         />
 
         <button @click="onSaveAIConfig" :disabled="!activeDeck">Save AI Config</button>
+        <button @click="onTestAIConnection">Test Connection</button>
+        <p v-if="aiTestMessage" class="muted">{{ aiTestMessage }}</p>
       </div>
-      <button @click="onAIGenerate" :disabled="!activeDeck">Generate 5 slides</button>
+      <button @click="onAIGenerate" :disabled="!activeDeck">AI生成Markdown并导入预览</button>
       <button @click="onPolishSelected" :disabled="!selectedElement">Polish selected text</button>
+
+      <h3>AI Modify Current Slide</h3>
+      <textarea
+        v-model="aiSlideInstruction"
+        rows="4"
+        placeholder="例如：添加一张与主题相关的图片，并美化背景色，保留原有核心结论"
+      ></textarea>
+      <button @click="onRewriteSelectedSlideWithAI" :disabled="!activeDeck || !activeSlide">
+        AI修改当前Slide
+      </button>
 
       <h3>Markdown Import</h3>
       <textarea v-model="markdownInput" rows="8"></textarea>
       <button @click="onImportMarkdown" :disabled="!activeDeck">Import Markdown</button>
+      <div class="markdown-preview" v-html="markdownPreviewHtml"></div>
+
+      <h3>AI Generate Rich Markdown</h3>
+      <label>Topic</label>
+      <input v-model="aiTopic" placeholder="e.g., 碳中和的商业模式" />
+      <label>Content Requirements (Markdown format guide will be included in prompt)</label>
+      <textarea v-model="aiGenerateRequirements" rows="8" placeholder="主标题：&#10;副标题：&#10;主要内容点（每行一个）：&#10;..."></textarea>
+      <button @click="onGenerateAndImportMarkdown" :disabled="!activeDeck">Generate & Import</button>
 
       <h3>Export</h3>
       <div class="row">
