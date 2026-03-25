@@ -15,7 +15,9 @@ import type {
   GenerateStructuredOutlineRequest,
   GenerateStructuredOutlineResponse,
   OutlineSlidePlan,
-  PolishTextRequest
+  PolishTextRequest,
+  SlideAgentTeamWorkflowEvent,
+  SlideAgentTeamWorkflowStage
 } from "@web-ppt/shared";
 import { AnthropicProvider, MockProvider, OpenAIProvider, type AIProvider } from "./providers";
 
@@ -525,6 +527,81 @@ function buildSlideMarkdownFromCopy(copy: SlideCopyArtifact): string {
   return `# ${copy.title}\n\n${bullets}`;
 }
 
+class AgentTeamValidationError extends Error {
+  readonly issues: SlideAgentTeamValidationIssue[];
+
+  constructor(issues: SlideAgentTeamValidationIssue[]) {
+    super(`Agent team validation failed: ${issues.map((item) => item.code).join(", ")}`);
+    this.name = "AgentTeamValidationError";
+    this.issues = issues;
+  }
+}
+
+const STAGE_ORDER: SlideAgentTeamWorkflowStage[] = ["outline", "copy", "background", "layout", "compose", "fallback"];
+
+function ensureWorkflowIntegrity(events: SlideAgentTeamWorkflowEvent[]): void {
+  let lastOrder = -1;
+
+  for (const event of events) {
+    if (event.endedAt < event.startedAt || event.durationMs < 0) {
+      throw new Error(`Workflow event has invalid timing for stage: ${event.stage}`);
+    }
+
+    const order = STAGE_ORDER.indexOf(event.stage);
+    if (order < lastOrder) {
+      throw new Error(`Workflow stage order is invalid: ${event.stage}`);
+    }
+
+    lastOrder = order;
+  }
+}
+
+function createWorkflowRecorder() {
+  const workflow: SlideAgentTeamWorkflowEvent[] = [];
+
+  const record = (event: SlideAgentTeamWorkflowEvent) => {
+    workflow.push(event);
+  };
+
+  const runStage = async <T>(stage: SlideAgentTeamWorkflowStage, slideIndexes: number[] | undefined, fn: () => Promise<T>): Promise<T> => {
+    const startedAt = Date.now();
+    try {
+      const result = await fn();
+      const endedAt = Date.now();
+      record({
+        stage,
+        status: "succeeded",
+        startedAt,
+        endedAt,
+        durationMs: endedAt - startedAt,
+        slideIndexes
+      });
+      return result;
+    } catch (error) {
+      const endedAt = Date.now();
+      const issue = error instanceof AgentTeamValidationError ? error.issues[0] : undefined;
+      record({
+        stage,
+        status: "failed",
+        startedAt,
+        endedAt,
+        durationMs: endedAt - startedAt,
+        slideIndexes,
+        issueCode: issue?.code,
+        message: issue?.message || (error as Error).message,
+        retryHint: issue?.retryHint
+      });
+      throw error;
+    }
+  };
+
+  return {
+    workflow,
+    runStage,
+    record
+  };
+}
+
 export async function generateDeckByAgentTeam(
   config: AIConfig,
   input: GenerateDeckFromOutlineRequest
@@ -533,8 +610,13 @@ export async function generateDeckByAgentTeam(
   const themeTemplate = input.themeTemplate || "business";
   const provider = createProvider(config);
   const faults = getFaultFlags(input.requirements);
+  const recorder = createWorkflowRecorder();
+  const pageIndexes = Array.from({ length: pages }, (_, idx) => idx + 1);
 
-  const buildFallback = async (issues: SlideAgentTeamValidationIssue[]): Promise<{ outline: GenerateStructuredOutlineResponse; orchestration: SlideAgentTeamResult }> => {
+  const buildFallback = async (
+    issues: SlideAgentTeamValidationIssue[]
+  ): Promise<{ outline: GenerateStructuredOutlineResponse; orchestration: SlideAgentTeamResult }> => {
+    const startedAt = Date.now();
     const outline = await generateStructuredOutline(config, {
       topic: input.topic,
       pages,
@@ -572,85 +654,115 @@ export async function generateDeckByAgentTeam(
       layout: layouts[index]
     }));
 
+    const endedAt = Date.now();
+    recorder.record({
+      stage: "fallback",
+      status: "succeeded",
+      startedAt,
+      endedAt,
+      durationMs: endedAt - startedAt,
+      slideIndexes: outline.slides.map((item) => item.index),
+      issueCode: issues[0]?.code,
+      message: issues[0]?.message,
+      retryHint: issues[0]?.retryHint
+    });
+
+    ensureWorkflowIntegrity(recorder.workflow);
+
     return {
       outline,
       orchestration: {
         mode: "single-agent",
         fallbackTriggered: true,
         issues,
-        slides
+        slides,
+        workflow: recorder.workflow
       }
     };
   };
 
   try {
-    const outline = await generateStructuredOutline(config, {
-      topic: input.topic,
-      pages,
-      requirements: input.requirements,
-      themeTemplate
-    });
+    const outline = await recorder.runStage("outline", pageIndexes, async () =>
+      generateStructuredOutline(config, {
+        topic: input.topic,
+        pages,
+        requirements: input.requirements,
+        themeTemplate
+      })
+    );
 
     if (faults.missingOutline) {
       outline.slides = [];
     }
 
-    const copies = await Promise.all(
-      outline.slides.map(async (plan) => {
-        const content = await generatePaginatedCopy(config, input.topic, outline.slides.map((item) => item.title).join(" | "), plan.index - 1);
-        return parseCopyArtifact(content, plan);
-      })
+    const copies = await recorder.runStage(
+      "copy",
+      outline.slides.map((item) => item.index),
+      async () =>
+        Promise.all(
+          outline.slides.map(async (plan) => {
+            const content = await generatePaginatedCopy(config, input.topic, outline.slides.map((item) => item.title).join(" | "), plan.index - 1);
+            return parseCopyArtifact(content, plan);
+          })
+        )
     );
 
     if (faults.pageMismatch && copies.length > 1) {
       copies.pop();
     }
 
-    const visualPairs = await Promise.all(
-      outline.slides.map(async (plan, index) => {
-        const [backgroundText, layoutText] = await Promise.all([
-          provider.generate(
-            [
-              "TEAM_BACKGROUND_JSON",
-              "你是PPT背景设计助手，只能输出JSON。",
-              `风格模板: ${THEME_PROFILE[themeTemplate]}`,
-              `页标题: ${plan.title}`,
-              `目标: ${plan.objective}`,
-              `视觉策略: ${plan.visualStrategy}`
-            ].join("\n"),
-            {
-              model: config.model,
-              temperature: config.temperature ?? 0.5,
-              maxTokens: config.maxTokens ?? 600,
-              jsonSchema: buildBackgroundArtifactSchema()
-            }
-          ),
-          provider.generate(
-            [
-              "TEAM_LAYOUT_JSON",
-              "你是PPT布局助手，只能输出JSON。",
-              `页标题: ${plan.title}`,
-              `要点数量: ${Math.max(2, plan.keyPoints.length)}`,
-              "坐标使用 0-1 相对值，避免重叠。"
-            ].join("\n"),
-            {
-              model: config.model,
-              temperature: config.temperature ?? 0.3,
-              maxTokens: config.maxTokens ?? 800,
-              jsonSchema: buildLayoutArtifactSchema()
-            }
-          )
-        ]);
-
-        return {
-          background: parseBackgroundArtifact(backgroundText, plan, index),
-          layout: parseLayoutArtifact(layoutText, plan)
-        };
-      })
+    const backgrounds = await recorder.runStage(
+      "background",
+      outline.slides.map((item) => item.index),
+      async () =>
+        Promise.all(
+          outline.slides.map(async (plan, index) => {
+            const backgroundText = await provider.generate(
+              [
+                "TEAM_BACKGROUND_JSON",
+                "你是PPT背景设计助手，只能输出JSON。",
+                `风格模板: ${THEME_PROFILE[themeTemplate]}`,
+                `页标题: ${plan.title}`,
+                `目标: ${plan.objective}`,
+                `视觉策略: ${plan.visualStrategy}`
+              ].join("\n"),
+              {
+                model: config.model,
+                temperature: config.temperature ?? 0.5,
+                maxTokens: config.maxTokens ?? 600,
+                jsonSchema: buildBackgroundArtifactSchema()
+              }
+            );
+            return parseBackgroundArtifact(backgroundText, plan, index);
+          })
+        )
     );
 
-    const backgrounds = visualPairs.map((pair) => pair.background);
-    const layouts = visualPairs.map((pair) => pair.layout);
+    const layouts = await recorder.runStage(
+      "layout",
+      outline.slides.map((item) => item.index),
+      async () =>
+        Promise.all(
+          outline.slides.map(async (plan) => {
+            const layoutText = await provider.generate(
+              [
+                "TEAM_LAYOUT_JSON",
+                "你是PPT布局助手，只能输出JSON。",
+                `页标题: ${plan.title}`,
+                `要点数量: ${Math.max(2, plan.keyPoints.length)}`,
+                "坐标使用 0-1 相对值，避免重叠。"
+              ].join("\n"),
+              {
+                model: config.model,
+                temperature: config.temperature ?? 0.3,
+                maxTokens: config.maxTokens ?? 800,
+                jsonSchema: buildLayoutArtifactSchema()
+              }
+            );
+            return parseLayoutArtifact(layoutText, plan);
+          })
+        )
+    );
 
     if (faults.invalidLayout && layouts[0]) {
       layouts[0] = {
@@ -662,22 +774,27 @@ export async function generateDeckByAgentTeam(
       };
     }
 
-    const issues = buildValidationIssues({ outline, copies, backgrounds, layouts });
-    if (issues.length) {
-      if (input.disableFallback) {
-        throw new Error(`Agent team validation failed: ${issues.map((item) => item.code).join(", ")}`);
-      }
-      return buildFallback(issues);
-    }
+    const slides = await recorder.runStage(
+      "compose",
+      outline.slides.map((item) => item.index),
+      async (): Promise<SlideAgentTeamSlide[]> => {
+        const issues = buildValidationIssues({ outline, copies, backgrounds, layouts });
+        if (issues.length) {
+          throw new AgentTeamValidationError(issues);
+        }
 
-    const slides: SlideAgentTeamSlide[] = outline.slides.map((plan, index) => ({
-      index: plan.index,
-      title: plan.title,
-      markdown: buildSlideMarkdownFromCopy(copies[index]),
-      copy: copies[index],
-      background: backgrounds[index],
-      layout: layouts[index]
-    }));
+        return outline.slides.map((plan, index) => ({
+          index: plan.index,
+          title: plan.title,
+          markdown: buildSlideMarkdownFromCopy(copies[index]),
+          copy: copies[index],
+          background: backgrounds[index],
+          layout: layouts[index]
+        }));
+      }
+    );
+
+    ensureWorkflowIntegrity(recorder.workflow);
 
     return {
       outline,
@@ -685,7 +802,8 @@ export async function generateDeckByAgentTeam(
         mode: "agent-team",
         fallbackTriggered: false,
         issues: [],
-        slides
+        slides,
+        workflow: recorder.workflow
       }
     };
   } catch (error) {
@@ -693,14 +811,17 @@ export async function generateDeckByAgentTeam(
       throw error;
     }
 
-    const issues: SlideAgentTeamValidationIssue[] = [
-      {
-        code: "OUTLINE_MISSING",
-        stage: "outline",
-        message: `Agent team failed: ${(error as Error).message}`,
-        retryHint: "Retry with clearer topic and page count."
-      }
-    ];
+    const issues: SlideAgentTeamValidationIssue[] =
+      error instanceof AgentTeamValidationError
+        ? error.issues
+        : [
+            {
+              code: "OUTLINE_MISSING",
+              stage: "outline",
+              message: `Agent team failed: ${(error as Error).message}`,
+              retryHint: "Retry with clearer topic and page count."
+            }
+          ];
 
     return buildFallback(issues);
   }

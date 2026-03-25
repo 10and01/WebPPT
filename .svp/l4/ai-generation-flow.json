@@ -1,0 +1,73 @@
+{
+  "kind": "flow",
+  "id": "ai-generation-flow",
+  "name": "AI Generation and Slide Materialization Flow",
+  "trigger": {
+    "type": "http",
+    "config": {
+      "methods": [
+        "POST"
+      ],
+      "paths": [
+        "/api/ai/decks/:deckId/generate",
+        "/api/ai/decks/:deckId/polish",
+        "/api/ai/decks/:deckId/generate-markdown",
+        "/api/ai/decks/:deckId/generate-by-outline",
+        "/api/ai/decks/:deckId/slides/:slideId/rewrite"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "id": "bind-ai-contract",
+      "action": "process",
+      "blockRef": "shared-contract-boundary",
+      "next": "run-ai-provider-pipeline"
+    },
+    {
+      "id": "run-ai-provider-pipeline",
+      "action": "process",
+      "blockRef": "ai-gateway-providers",
+      "next": "materialize-slide-markdown"
+    },
+    {
+      "id": "materialize-slide-markdown",
+      "action": "process",
+      "blockRef": "markdown-ingestion-services",
+      "next": "commit-generated-deck-state"
+    },
+    {
+      "id": "commit-generated-deck-state",
+      "action": "process",
+      "blockRef": "deck-crud-runtime",
+      "next": null
+    }
+  ],
+  "dataFlows": [
+    {
+      "from": "bind-ai-contract.runtimeContractSurface",
+      "to": "run-ai-provider-pipeline.deckGeneration"
+    },
+    {
+      "from": "run-ai-provider-pipeline.outlineDeck",
+      "to": "materialize-slide-markdown.appendSlideMarkdown"
+    },
+    {
+      "from": "materialize-slide-markdown.overwriteResult",
+      "to": "commit-generated-deck-state.replaceElements"
+    },
+    {
+      "from": "commit-generated-deck-state.deckResult",
+      "to": "bind-ai-contract.domainModels"
+    }
+  ],
+  "contentHash": "5e1308dc13dd23fa",
+  "revision": {
+    "rev": 3,
+    "parentRev": 2,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T02:08:25.487Z"
+  }
+}

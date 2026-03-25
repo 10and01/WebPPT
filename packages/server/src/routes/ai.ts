@@ -10,7 +10,9 @@ import type {
   ImportMarkdownRequest,
   PolishTextRequest,
   Slide,
-  DeckThemeTemplate
+  DeckThemeTemplate,
+  SlideAgentTeamResult,
+  SlideAgentTeamSlide
 } from "@web-ppt/shared";
 import { deckStore } from "../data/deck-store";
 import {
@@ -34,6 +36,8 @@ import {
 
 const DEFAULT_SLIDE_BG = "#ffffff";
 const BEAUTIFIED_BG = "#eef6ff";
+const SINGLE_AGENT_BG = "#F8FAFC";
+const SINGLE_AGENT_TEXT = "#0f172a";
 
 function extractBackgroundHtml(markdown: string): string | undefined {
   const fenced = markdown.match(/```(?:background-html|bg-html|slide-bg-html)\s*([\s\S]*?)```/i);
@@ -59,7 +63,7 @@ function normalizeToolPolicy(input?: AIToolPolicy): AIToolPolicy {
   };
 }
 
-function shouldUseAgentTeamMode(input: GenerateDeckFromOutlineRequest): boolean {
+export function shouldUseAgentTeamMode(input: GenerateDeckFromOutlineRequest): boolean {
   if (input.orchestrationMode === "agent-team") {
     return true;
   }
@@ -109,6 +113,95 @@ function buildAiImageElement(slideId: string, promptText: string, zIndex: number
       opacity: 1,
       borderRadius: 10
     }
+  };
+}
+
+function buildSingleAgentOrchestration(input: {
+  outline: Awaited<ReturnType<typeof generateStructuredOutline>>;
+  slideMarkdowns: string[];
+  themeTemplate: DeckThemeTemplate;
+}): SlideAgentTeamResult {
+  const startedAt = Date.now();
+  const slides: SlideAgentTeamSlide[] = input.outline.slides.map((plan, index) => ({
+    index: plan.index,
+    title: plan.title,
+    markdown: input.slideMarkdowns[index] || `# ${plan.title}`,
+    copy: {
+      index: plan.index,
+      title: plan.title,
+      bullets: plan.keyPoints.slice(0, 5),
+      notes: plan.objective
+    },
+    background: {
+      index: plan.index,
+      theme: `${input.themeTemplate}-single-agent`,
+      bgColor: SINGLE_AGENT_BG,
+      textColor: SINGLE_AGENT_TEXT,
+      visualHint: plan.visualStrategy
+    },
+    layout: {
+      index: plan.index,
+      template: "single-agent-default",
+      regions: [
+        { id: "title", kind: "title", x: 0.08, y: 0.08, width: 0.84, height: 0.14 },
+        { id: "bullets", kind: "bullets", x: 0.08, y: 0.26, width: 0.84, height: 0.6 }
+      ]
+    }
+  }));
+
+  const outlineEndedAt = Date.now();
+  const composeEndedAt = Date.now();
+
+  return {
+    mode: "single-agent",
+    fallbackTriggered: false,
+    issues: [],
+    slides,
+    workflow: [
+      {
+        stage: "outline",
+        status: "succeeded",
+        startedAt,
+        endedAt: outlineEndedAt,
+        durationMs: outlineEndedAt - startedAt,
+        slideIndexes: input.outline.slides.map((item) => item.index)
+      },
+      {
+        stage: "copy",
+        status: "skipped",
+        startedAt: outlineEndedAt,
+        endedAt: outlineEndedAt,
+        durationMs: 0,
+        slideIndexes: input.outline.slides.map((item) => item.index),
+        message: "Single-agent mode bypassed copy stage."
+      },
+      {
+        stage: "background",
+        status: "skipped",
+        startedAt: outlineEndedAt,
+        endedAt: outlineEndedAt,
+        durationMs: 0,
+        slideIndexes: input.outline.slides.map((item) => item.index),
+        message: "Single-agent mode bypassed background stage."
+      },
+      {
+        stage: "layout",
+        status: "skipped",
+        startedAt: outlineEndedAt,
+        endedAt: outlineEndedAt,
+        durationMs: 0,
+        slideIndexes: input.outline.slides.map((item) => item.index),
+        message: "Single-agent mode bypassed layout stage."
+      },
+      {
+        stage: "compose",
+        status: "succeeded",
+        startedAt: outlineEndedAt,
+        endedAt: composeEndedAt,
+        durationMs: composeEndedAt - outlineEndedAt,
+        slideIndexes: input.outline.slides.map((item) => item.index)
+      }
+    ]
   };
 }
 
@@ -259,35 +352,78 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ message: "tool policy must allow append-slide-markdown" });
       }
 
-      const outline = await generateStructuredOutline(deck.aiConfig, {
+      const useAgentTeam = shouldUseAgentTeamMode(payload);
+      const modePayload: GenerateDeckFromOutlineRequest = {
+        ...payload,
         topic,
         pages,
-        requirements: payload.requirements,
         themeTemplate
-      });
+      };
 
       const createdSlides: Array<{ slideId: string; slideNumber: number; title: string; markdown: string }> = [];
-      for (const plan of outline.slides) {
-        const markdown = await generateSlideMarkdownFromOutline(deck.aiConfig, {
+      let outline: Awaited<ReturnType<typeof generateStructuredOutline>>;
+      let orchestration: SlideAgentTeamResult | undefined;
+
+      if (useAgentTeam) {
+        const teamResult = await generateDeckByAgentTeam(deck.aiConfig, modePayload);
+        outline = teamResult.outline;
+        orchestration = teamResult.orchestration;
+
+        for (const generated of teamResult.orchestration.slides) {
+          const appended = appendSlideMarkdown(deck.id, {
+            markdown: generated.markdown,
+            title: generated.title
+          });
+
+          if (!appended) {
+            return reply.code(500).send({ message: "failed to append generated slide markdown" });
+          }
+
+          createdSlides.push({
+            slideId: appended.slide.id,
+            slideNumber: appended.slide.slideNumber,
+            title: appended.slide.title,
+            markdown: appended.markdown
+          });
+        }
+      } else {
+        outline = await generateStructuredOutline(deck.aiConfig, {
           topic,
-          plan,
+          pages,
+          requirements: payload.requirements,
           themeTemplate
         });
 
-        const appended = appendSlideMarkdown(deck.id, {
-          markdown,
-          title: plan.title
-        });
+        const markdowns: string[] = [];
+        for (const plan of outline.slides) {
+          const markdown = await generateSlideMarkdownFromOutline(deck.aiConfig, {
+            topic,
+            plan,
+            themeTemplate
+          });
 
-        if (!appended) {
-          return reply.code(500).send({ message: "failed to append generated slide markdown" });
+          const appended = appendSlideMarkdown(deck.id, {
+            markdown,
+            title: plan.title
+          });
+
+          if (!appended) {
+            return reply.code(500).send({ message: "failed to append generated slide markdown" });
+          }
+
+          markdowns.push(appended.markdown);
+          createdSlides.push({
+            slideId: appended.slide.id,
+            slideNumber: appended.slide.slideNumber,
+            title: appended.slide.title,
+            markdown: appended.markdown
+          });
         }
 
-        createdSlides.push({
-          slideId: appended.slide.id,
-          slideNumber: appended.slide.slideNumber,
-          title: appended.slide.title,
-          markdown: appended.markdown
+        orchestration = buildSingleAgentOrchestration({
+          outline,
+          slideMarkdowns: markdowns,
+          themeTemplate
         });
       }
 
@@ -299,7 +435,8 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       return {
         outline,
         slides: createdSlides,
-        deck: latest
+        deck: latest,
+        orchestration
       };
     } catch (error) {
       request.log.error(error, "AI outline pipeline failed");

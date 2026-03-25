@@ -227,6 +227,28 @@ export interface SlideAgentTeamValidationIssue {
   retryHint?: string;
 }
 
+export type SlideAgentTeamWorkflowStage =
+  | "outline"
+  | "copy"
+  | "background"
+  | "layout"
+  | "compose"
+  | "fallback";
+
+export type SlideAgentTeamWorkflowStatus = "running" | "succeeded" | "failed" | "skipped";
+
+export interface SlideAgentTeamWorkflowEvent {
+  stage: SlideAgentTeamWorkflowStage;
+  status: SlideAgentTeamWorkflowStatus;
+  startedAt: number;
+  endedAt: number;
+  durationMs: number;
+  slideIndexes?: number[];
+  issueCode?: SlideAgentTeamValidationIssue["code"];
+  message?: string;
+  retryHint?: string;
+}
+
 export interface SlideAgentTeamSlide {
   index: number;
   title: string;
@@ -241,6 +263,7 @@ export interface SlideAgentTeamResult {
   fallbackTriggered: boolean;
   issues: SlideAgentTeamValidationIssue[];
   slides: SlideAgentTeamSlide[];
+  workflow: SlideAgentTeamWorkflowEvent[];
 }
 
 export interface GenerateDeckFromOutlineRequest {

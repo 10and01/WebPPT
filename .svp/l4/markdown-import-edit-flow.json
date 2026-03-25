@@ -1,0 +1,63 @@
+{
+  "kind": "flow",
+  "id": "markdown-import-edit-flow",
+  "name": "Markdown Import and Edit Flow",
+  "trigger": {
+    "type": "http",
+    "config": {
+      "methods": [
+        "GET",
+        "PUT",
+        "POST"
+      ],
+      "paths": [
+        "/api/decks/:deckId/import-markdown",
+        "/api/decks/:deckId/pages/:pageNumber/markdown",
+        "/api/decks/:deckId/pages/append-markdown"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "id": "bind-markdown-contract",
+      "action": "process",
+      "blockRef": "shared-contract-boundary",
+      "next": "run-markdown-page-tools"
+    },
+    {
+      "id": "run-markdown-page-tools",
+      "action": "process",
+      "blockRef": "markdown-ingestion-services",
+      "next": "persist-deck-state"
+    },
+    {
+      "id": "persist-deck-state",
+      "action": "process",
+      "blockRef": "deck-crud-runtime",
+      "next": null
+    }
+  ],
+  "dataFlows": [
+    {
+      "from": "bind-markdown-contract.runtimeContractSurface",
+      "to": "run-markdown-page-tools.importMarkdown"
+    },
+    {
+      "from": "run-markdown-page-tools.overwriteResult",
+      "to": "persist-deck-state.replaceElements"
+    },
+    {
+      "from": "persist-deck-state.deckResult",
+      "to": "bind-markdown-contract.domainModels"
+    }
+  ],
+  "contentHash": "2cca70a759c4957f",
+  "revision": {
+    "rev": 3,
+    "parentRev": 2,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T02:08:25.500Z"
+  }
+}

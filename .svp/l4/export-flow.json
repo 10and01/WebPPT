@@ -1,0 +1,64 @@
+{
+  "kind": "flow",
+  "id": "export-flow",
+  "name": "Export Job and Artifact Delivery Flow",
+  "trigger": {
+    "type": "http",
+    "config": {
+      "methods": [
+        "POST",
+        "GET"
+      ],
+      "paths": [
+        "/api/exports",
+        "/api/exports/:jobId",
+        "/api/exports/:jobId/download",
+        "/api/exports/:jobId/files",
+        "/api/exports/:jobId/files/:index"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "id": "bind-export-contract",
+      "action": "process",
+      "blockRef": "shared-contract-boundary",
+      "next": "load-deck-for-export"
+    },
+    {
+      "id": "load-deck-for-export",
+      "action": "process",
+      "blockRef": "deck-crud-runtime",
+      "next": "run-export-pipeline"
+    },
+    {
+      "id": "run-export-pipeline",
+      "action": "process",
+      "blockRef": "export-pipeline-routes",
+      "next": null
+    }
+  ],
+  "dataFlows": [
+    {
+      "from": "bind-export-contract.runtimeContractSurface",
+      "to": "run-export-pipeline.exportRequest"
+    },
+    {
+      "from": "load-deck-for-export.deckResult",
+      "to": "run-export-pipeline.deckSnapshot"
+    },
+    {
+      "from": "run-export-pipeline.exportJob",
+      "to": "bind-export-contract.domainModels"
+    }
+  ],
+  "contentHash": "a31e8a65d47d39bd",
+  "revision": {
+    "rev": 3,
+    "parentRev": 2,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T02:08:25.498Z"
+  }
+}

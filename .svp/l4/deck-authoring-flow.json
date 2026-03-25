@@ -1,0 +1,61 @@
+{
+  "kind": "flow",
+  "id": "deck-authoring-flow",
+  "name": "Deck Authoring Flow",
+  "trigger": {
+    "type": "http",
+    "config": {
+      "methods": [
+        "GET",
+        "POST",
+        "PUT",
+        "DELETE"
+      ],
+      "paths": [
+        "/api/decks",
+        "/api/decks/:deckId",
+        "/api/decks/:deckId/slides",
+        "/api/decks/:deckId/slides/:slideId/elements",
+        "/api/decks/:deckId/slides/:slideId",
+        "/api/decks/:deckId/ai-config"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "id": "bind-contract",
+      "action": "process",
+      "blockRef": "shared-contract-boundary",
+      "next": "apply-deck-crud"
+    },
+    {
+      "id": "apply-deck-crud",
+      "action": "process",
+      "blockRef": "deck-crud-runtime",
+      "next": null
+    }
+  ],
+  "dataFlows": [
+    {
+      "from": "bind-contract.runtimeContractSurface",
+      "to": "apply-deck-crud.createDeck"
+    },
+    {
+      "from": "bind-contract.runtimeContractSurface",
+      "to": "apply-deck-crud.replaceElements"
+    },
+    {
+      "from": "apply-deck-crud.deckResult",
+      "to": "bind-contract.domainModels"
+    }
+  ],
+  "contentHash": "5575c38a062c00d0",
+  "revision": {
+    "rev": 3,
+    "parentRev": 2,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T02:08:25.494Z"
+  }
+}

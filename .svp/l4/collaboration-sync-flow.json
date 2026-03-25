@@ -1,0 +1,175 @@
+{
+  "kind": "event-graph",
+  "id": "collaboration-sync-flow",
+  "name": "Collaboration Session Sync Event Graph",
+  "state": {
+    "collabDoc": {
+      "type": "Y.Doc",
+      "description": "In-memory CRDT document per deck"
+    },
+    "collaborators": {
+      "type": "CollaboratorPresence[]",
+      "description": "Connected users with role and active slide state"
+    },
+    "sessionRecovery": {
+      "type": "SessionRecoveryState",
+      "description": "Recovery snapshots for reconnect and cleanup"
+    }
+  },
+  "handlers": [
+    {
+      "id": "on-ws-connect",
+      "event": "ws.connect",
+      "steps": [
+        {
+          "id": "bind-ws-contract",
+          "action": "process",
+          "blockRef": "shared-contract-boundary",
+          "next": "attach-collab-client"
+        },
+        {
+          "id": "attach-collab-client",
+          "action": "process",
+          "blockRef": "collaboration-session-hub",
+          "next": null
+        }
+      ],
+      "dataFlows": [
+        {
+          "from": "$event.query",
+          "to": "bind-ws-contract.requestDTOs"
+        },
+        {
+          "from": "bind-ws-contract.runtimeContractSurface",
+          "to": "attach-collab-client.wsConnect"
+        },
+        {
+          "from": "attach-collab-client.syncEnvelope",
+          "to": "$state.collabDoc"
+        },
+        {
+          "from": "attach-collab-client.presenceEnvelope",
+          "to": "$state.collaborators"
+        }
+      ]
+    },
+    {
+      "id": "on-ws-update-message",
+      "event": "ws.update",
+      "steps": [
+        {
+          "id": "apply-y-update",
+          "action": "process",
+          "blockRef": "collaboration-session-hub",
+          "next": null
+        }
+      ],
+      "dataFlows": [
+        {
+          "from": "$event.payload",
+          "to": "apply-y-update.wsMessage"
+        },
+        {
+          "from": "$state.collabDoc",
+          "to": "apply-y-update.yDocState"
+        },
+        {
+          "from": "apply-y-update.syncEnvelope",
+          "to": "$state.collabDoc"
+        },
+        {
+          "from": "apply-y-update.sessionRecoveryState",
+          "to": "$state.sessionRecovery"
+        }
+      ]
+    },
+    {
+      "id": "on-ws-page-or-cursor",
+      "event": "ws.page-or-cursor",
+      "steps": [
+        {
+          "id": "fanout-presence-events",
+          "action": "parallel",
+          "branches": [
+            "broadcast-page",
+            "broadcast-cursor"
+          ]
+        },
+        {
+          "id": "broadcast-page",
+          "action": "process",
+          "blockRef": "collaboration-session-hub",
+          "next": "merge-presence"
+        },
+        {
+          "id": "broadcast-cursor",
+          "action": "process",
+          "blockRef": "collaboration-session-hub",
+          "next": "merge-presence"
+        },
+        {
+          "id": "merge-presence",
+          "action": "wait",
+          "waitFor": [
+            "broadcast-page",
+            "broadcast-cursor"
+          ],
+          "next": null
+        }
+      ],
+      "dataFlows": [
+        {
+          "from": "$event.payload",
+          "to": "broadcast-page.wsMessage"
+        },
+        {
+          "from": "$event.payload",
+          "to": "broadcast-cursor.wsMessage"
+        },
+        {
+          "from": "broadcast-page.presenceEnvelope",
+          "to": "$state.collaborators"
+        },
+        {
+          "from": "broadcast-cursor.presenceEnvelope",
+          "to": "$state.collaborators"
+        }
+      ]
+    },
+    {
+      "id": "on-ws-disconnect",
+      "event": "ws.disconnect",
+      "steps": [
+        {
+          "id": "save-session-and-prune",
+          "action": "process",
+          "blockRef": "collaboration-session-hub",
+          "next": null
+        }
+      ],
+      "dataFlows": [
+        {
+          "from": "$event.payload",
+          "to": "save-session-and-prune.wsMessage"
+        },
+        {
+          "from": "save-session-and-prune.sessionRecoveryState",
+          "to": "$state.sessionRecovery"
+        },
+        {
+          "from": "save-session-and-prune.presenceEnvelope",
+          "to": "$state.collaborators"
+        }
+      ]
+    }
+  ],
+  "contentHash": "971a1af705127619",
+  "revision": {
+    "rev": 2,
+    "parentRev": 1,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T02:07:19.373Z"
+  }
+}

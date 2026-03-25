@@ -224,6 +224,70 @@ button:disabled {
   color: var(--warn);
 }
 
+.workflow-list {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.workflow-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  background: #ffffff;
+}
+
+.workflow-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.workflow-badge {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workflow-badge.ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.workflow-badge.fail {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.workflow-badge.skip {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.workflow-badge.run {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.workflow-issues {
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  background: #fff7ed;
+  padding: 8px;
+  margin-bottom: 12px;
+}
+
+.workflow-issues h4 {
+  margin: 0 0 6px;
+}
+
+.workflow-issues ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .empty {
   border: 1px dashed var(--line);
   border-radius: 10px;

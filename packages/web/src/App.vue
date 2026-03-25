@@ -2,7 +2,15 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { nanoid } from "nanoid";
 import { marked } from "marked";
-import type { CollaboratorPresence, Deck, DeckThemeTemplate, ElementModel, Slide } from "@web-ppt/shared";
+import type {
+  CollaboratorPresence,
+  Deck,
+  DeckOrchestrationMode,
+  DeckThemeTemplate,
+  ElementModel,
+  Slide,
+  SlideAgentTeamWorkflowEvent
+} from "@web-ppt/shared";
 import {
   addSlide,
   createDeck,
@@ -36,11 +44,17 @@ const aiGenerateRequirements = ref("主标题：\n副标题：\n主要内容点�
 const aiSlideInstruction = ref("请在当前页添加一张图片并美化背景，保持内容专业简洁");
 const aiTopic = ref("介绍碳中和的商业模式");
 const aiThemeTemplate = ref<DeckThemeTemplate>("business");
+const aiOrchestrationMode = ref<DeckOrchestrationMode>("auto");
 const aiProvider = ref<"openai" | "anthropic">("openai");
 const aiModel = ref("gpt-4.1-mini");
 const aiApiKey = ref("");
 const aiApiEndpoint = ref("");
 const aiTestMessage = ref("");
+const aiWorkflow = ref<SlideAgentTeamWorkflowEvent[]>([]);
+const aiWorkflowIssues = ref<Array<{ code: string; stage: string; message: string; slideIndex?: number; retryHint?: string }>>([]);
+const aiWorkflowMode = ref<"agent-team" | "single-agent" | "-">("-");
+const aiWorkflowFallback = ref(false);
+const aiWorkflowIntegrityError = ref("");
 const collabEnabled = ref(false);
 const role = ref<"editor" | "viewer">("editor");
 const currentUserId = `user-${Math.random().toString(36).slice(2, 7)}`;
@@ -122,6 +136,56 @@ const markdownPreviewHtml = computed(() => {
     return "<p>Markdown parse failed.</p>";
   }
 });
+
+function validateWorkflowSequence(events: SlideAgentTeamWorkflowEvent[]): string {
+  const stageOrder = ["outline", "copy", "background", "layout", "compose", "fallback"];
+  let last = -1;
+
+  for (const event of events) {
+    if (event.endedAt < event.startedAt || event.durationMs < 0) {
+      return `Invalid timing on stage: ${event.stage}`;
+    }
+
+    const current = stageOrder.indexOf(event.stage);
+    if (current < last) {
+      return `Invalid stage order at: ${event.stage}`;
+    }
+    last = current;
+  }
+
+  return "";
+}
+
+function normalizeWorkflow(events: SlideAgentTeamWorkflowEvent[]): SlideAgentTeamWorkflowEvent[] {
+  return [...events].sort((a, b) => a.startedAt - b.startedAt || a.endedAt - b.endedAt);
+}
+
+function assertValidOrchestrationMode(mode: DeckOrchestrationMode): void {
+  const allowed: DeckOrchestrationMode[] = ["auto", "agent-team", "single-agent"];
+  if (!allowed.includes(mode)) {
+    throw new Error(`Invalid orchestration mode: ${mode}`);
+  }
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) {
+    return `${durationMs}ms`;
+  }
+  return `${(durationMs / 1000).toFixed(2)}s`;
+}
+
+function getWorkflowStatusClass(status: SlideAgentTeamWorkflowEvent["status"]): string {
+  if (status === "succeeded") {
+    return "ok";
+  }
+  if (status === "failed") {
+    return "fail";
+  }
+  if (status === "skipped") {
+    return "skip";
+  }
+  return "run";
+}
 const activeSlideBackgroundDoc = computed(() => {
   const raw = activeSlide.value?.bgHtml?.trim();
   if (!raw) {
@@ -633,15 +697,24 @@ async function onAIGenerate() {
 
   status.value = "ai-outline-generating";
   try {
+    assertValidOrchestrationMode(aiOrchestrationMode.value);
+
     const generated = await generateDeckByOutline(activeDeck.value.id, {
       topic: aiTopic.value,
       pages: 6,
       requirements: aiGenerateRequirements.value,
       themeTemplate: aiThemeTemplate.value,
+      orchestrationMode: aiOrchestrationMode.value,
       toolPolicy: {
         allowedTools: ["generate-outline", "append-slide-markdown", "read-slide-markdown", "overwrite-slide-markdown"]
       }
     });
+
+    aiWorkflow.value = normalizeWorkflow(generated.orchestration?.workflow || []);
+    aiWorkflowIssues.value = generated.orchestration?.issues || [];
+    aiWorkflowMode.value = generated.orchestration?.mode || "-";
+    aiWorkflowFallback.value = generated.orchestration?.fallbackTriggered || false;
+    aiWorkflowIntegrityError.value = validateWorkflowSequence(aiWorkflow.value);
 
     markdownInput.value = generated.slides.map((slide) => slide.markdown).join("\n\n---\n\n");
     clearPendingEditTimers();
@@ -898,6 +971,13 @@ onBeforeUnmount(() => {
           <option value="product-launch">Product Launch</option>
         </select>
 
+        <label>Orchestration Mode</label>
+        <select v-model="aiOrchestrationMode">
+          <option value="auto">auto</option>
+          <option value="agent-team">agent-team</option>
+          <option value="single-agent">single-agent</option>
+        </select>
+
         <label>API Key</label>
         <input v-model="aiApiKey" placeholder="输入 API Key" type="password" />
 
@@ -917,6 +997,35 @@ onBeforeUnmount(() => {
       </div>
       <button @click="onAIGenerate" :disabled="!activeDeck">AI生成Markdown并导入预览</button>
       <button @click="onPolishSelected" :disabled="!selectedElement">Polish selected text</button>
+
+      <h3>Agent Team Workflow</h3>
+      <p class="muted">Mode: {{ aiWorkflowMode }} | Fallback: {{ aiWorkflowFallback ? 'yes' : 'no' }}</p>
+      <p v-if="aiWorkflowIntegrityError" class="warn">Workflow integrity: {{ aiWorkflowIntegrityError }}</p>
+      <div v-if="aiWorkflow.length" class="workflow-list">
+        <div v-for="(event, idx) in aiWorkflow" :key="`${event.stage}-${idx}-${event.startedAt}`" class="workflow-item">
+          <div class="workflow-row">
+            <strong>{{ event.stage }}</strong>
+            <span class="workflow-badge" :class="getWorkflowStatusClass(event.status)">{{ event.status }}</span>
+          </div>
+          <div class="muted">Duration: {{ formatDuration(event.durationMs) }}</div>
+          <div v-if="event.slideIndexes?.length" class="muted">Slides: {{ event.slideIndexes.join(', ') }}</div>
+          <div v-if="event.issueCode" class="error">Issue: {{ event.issueCode }}</div>
+          <div v-if="event.message" class="muted">{{ event.message }}</div>
+          <div v-if="event.retryHint" class="warn">Hint: {{ event.retryHint }}</div>
+        </div>
+      </div>
+      <p v-else class="muted">Run generation to see workflow timeline.</p>
+
+      <div v-if="aiWorkflowIssues.length" class="workflow-issues">
+        <h4>Workflow Issues</h4>
+        <ul>
+          <li v-for="(issue, idx) in aiWorkflowIssues" :key="`${issue.code}-${idx}`">
+            {{ issue.stage }} / {{ issue.code }}: {{ issue.message }}
+            <span v-if="issue.slideIndex"> (slide {{ issue.slideIndex }})</span>
+            <span v-if="issue.retryHint"> - {{ issue.retryHint }}</span>
+          </li>
+        </ul>
+      </div>
 
       <h3>AI Modify Current Slide</h3>
       <textarea

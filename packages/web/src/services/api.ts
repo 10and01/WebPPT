@@ -4,12 +4,12 @@ import type {
   AISlideEditRequest,
   AIConfig,
   CreateDeckRequest,
-  DeckThemeTemplate,
   Deck,
   ElementModel,
   ExportDeckRequest,
   ExportJob,
   GenerateDeckFromOutlineRequest,
+  GenerateDeckFromOutlineResponse,
   GenerateDeckRequest,
   ImportMarkdownRequest,
   OverwriteSlideMarkdownRequest,
@@ -285,32 +285,7 @@ export async function generateRichMarkdown(deckId: string, topic: string, requir
 export async function generateDeckByOutline(
   deckId: string,
   input: GenerateDeckFromOutlineRequest
-): Promise<{
-  outline: {
-    topic: string;
-    themeTemplate: DeckThemeTemplate;
-    slides: Array<{
-      index: number;
-      title: string;
-      objective: string;
-      keyPoints: string[];
-      visualStrategy: string;
-    }>;
-  };
-  slides: Array<{ slideId: string; slideNumber: number; title: string; markdown: string }>;
-  deck: Deck;
-  orchestration?: {
-    mode: "agent-team" | "single-agent";
-    fallbackTriggered: boolean;
-    issues: Array<{
-      code: string;
-      stage: string;
-      message: string;
-      slideIndex?: number;
-      retryHint?: string;
-    }>;
-  };
-}> {
+): Promise<GenerateDeckFromOutlineResponse> {
   const response = await fetch(`${API_BASE}/ai/decks/${deckId}/generate-by-outline`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -321,32 +296,7 @@ export async function generateDeckByOutline(
     throw new Error(await readErrorMessage(response, "Failed to generate deck by outline"));
   }
 
-  return (await response.json()) as {
-    outline: {
-      topic: string;
-      themeTemplate: DeckThemeTemplate;
-      slides: Array<{
-        index: number;
-        title: string;
-        objective: string;
-        keyPoints: string[];
-        visualStrategy: string;
-      }>;
-    };
-    slides: Array<{ slideId: string; slideNumber: number; title: string; markdown: string }>;
-    deck: Deck;
-    orchestration?: {
-      mode: "agent-team" | "single-agent";
-      fallbackTriggered: boolean;
-      issues: Array<{
-        code: string;
-        stage: string;
-        message: string;
-        slideIndex?: number;
-        retryHint?: string;
-      }>;
-    };
-  };
+  return (await response.json()) as GenerateDeckFromOutlineResponse;
 }
 
 export async function rewriteSlideWithAI(deckId: string, slideId: string, input: AISlideEditRequest) {

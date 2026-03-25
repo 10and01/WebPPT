@@ -28,7 +28,7 @@ describe("Canvas Code Sync", () => {
     // Simplified parser for testing
     const elements: ElementModel[] = [];
     const regex =
-      /const\s+(\w+)\s+=\s*\{[\s\S]*?type:\s*"(\w+)"[\s\S]*?x:\s*(\d+),[\s\S]*?y:\s*(\d+),[\s\S]*?width:\s*(\d+),[\s\S]*?height:\s*(\d+)/g;
+      /const\s+([\w-]+)\s+=\s*\{[\s\S]*?type:\s*"(\w+)"[\s\S]*?x:\s*(\d+),[\s\S]*?y:\s*(\d+),[\s\S]*?width:\s*(\d+),[\s\S]*?height:\s*(\d+)/g;
 
     let match;
     while ((match = regex.exec(code)) !== null) {

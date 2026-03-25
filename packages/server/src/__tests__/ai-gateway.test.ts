@@ -117,6 +117,25 @@ describe("AI Gateway Fault Tolerance", () => {
     expect(result.orchestration.issues.length).toBe(0);
     expect(result.orchestration.slides).toHaveLength(3);
     expect(result.orchestration.slides[0].markdown.startsWith("# ")).toBe(true);
+    expect(result.orchestration.workflow.length).toBeGreaterThanOrEqual(5);
+    expect(result.orchestration.workflow[0].stage).toBe("outline");
+    expect(result.orchestration.workflow[result.orchestration.workflow.length - 1].stage).toBe("compose");
+    expect(result.orchestration.workflow.every((event) => event.durationMs >= 0)).toBe(true);
+  });
+
+  it("should include fallback workflow event when fallback is triggered", async () => {
+    const result = await generateDeckByAgentTeam(mockConfig, {
+      topic: "测试页数不一致并回退",
+      pages: 3,
+      requirements: "[team-fault:page-mismatch]",
+      orchestrationMode: "agent-team",
+      themeTemplate: "business"
+    });
+
+    expect(result.orchestration.mode).toBe("single-agent");
+    expect(result.orchestration.fallbackTriggered).toBe(true);
+    expect(result.orchestration.issues.length).toBeGreaterThan(0);
+    expect(result.orchestration.workflow.some((event) => event.stage === "fallback" && event.status === "succeeded")).toBe(true);
   });
 
   it("should report page mismatch validation failure in agent-team mode", async () => {
