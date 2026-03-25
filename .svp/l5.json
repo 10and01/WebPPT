@@ -1,0 +1,91 @@
+{
+  "id": "web-ppt",
+  "name": "WEB-PPT",
+  "version": "0.1.0",
+  "intent": "WEB-PPT enables teams to co-create, generate, and export presentation decks through a unified workspace combining canvas editing, markdown import, AI-assisted authoring, and real-time collaboration. Success is measured by reliable end-to-end deck production from idea to multi-format export with consistent slide quality and low manual rework.",
+  "constraints": [
+    "Support both manual authoring and AI-assisted generation in the same deck lifecycle.",
+    "AI generation must tolerate provider outages or missing credentials via deterministic fallback behavior.",
+    "Collaborative editing must preserve consistency under concurrent operations.",
+    "Generated slide outputs must remain renderable for HTML, PDF, PNG, and PPTX export paths.",
+    "Agent-team orchestration must enforce stage validation and return actionable diagnostics on partial failures.",
+    "Local development should run with Node.js and workspace scripts without mandatory external infrastructure."
+  ],
+  "domains": [
+    {
+      "name": "deck-authoring",
+      "description": "Core deck, slide, and element authoring lifecycle for canvas-based editing.",
+      "dependencies": [
+        "markdown-ingestion",
+        "ai-content-generation",
+        "collaboration-sync"
+      ]
+    },
+    {
+      "name": "markdown-ingestion",
+      "description": "Transforms markdown and rich directives into structured slide content and visual metadata.",
+      "dependencies": [
+        "deck-authoring"
+      ]
+    },
+    {
+      "name": "ai-content-generation",
+      "description": "Produces outlines, page copy, and orchestrated agent-team artifacts for slide creation.",
+      "dependencies": [
+        "deck-authoring"
+      ]
+    },
+    {
+      "name": "collaboration-sync",
+      "description": "Maintains real-time shared state and conflict-safe synchronization across collaborators.",
+      "dependencies": [
+        "deck-authoring"
+      ]
+    },
+    {
+      "name": "export-pipeline",
+      "description": "Builds final deliverables from deck state across web and document export formats.",
+      "dependencies": [
+        "deck-authoring",
+        "markdown-ingestion"
+      ]
+    }
+  ],
+  "integrations": [
+    {
+      "name": "OpenAI API",
+      "type": "api",
+      "description": "Primary external LLM provider for draft, outline, and rewrite generation."
+    },
+    {
+      "name": "Anthropic API",
+      "type": "api",
+      "description": "Alternative LLM provider for structured and narrative generation tasks."
+    },
+    {
+      "name": "WebSocket Transport",
+      "type": "api",
+      "description": "Bi-directional channel for collaboration presence and sync messaging."
+    },
+    {
+      "name": "Puppeteer Runtime",
+      "type": "api",
+      "description": "Headless browser runtime used for HTML-to-PDF/PNG export rendering."
+    },
+    {
+      "name": "Filesystem Export Storage",
+      "type": "storage",
+      "description": "Local file output target for generated export artifacts."
+    }
+  ],
+  "language": "en",
+  "contentHash": "f085f34a9f5ef87c",
+  "revision": {
+    "rev": 2,
+    "parentRev": 1,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T01:50:42.537Z"
+  }
+}

@@ -323,6 +323,26 @@ export class MockProvider implements AIProvider {
       return `# ${title}\n\n- 关键要点一\n- 关键要点二\n- 关键要点三`;
     }
 
+    if (prompt.includes("TEAM_BACKGROUND_JSON")) {
+      return JSON.stringify({
+        theme: "business-clean",
+        bgColor: "#F8FAFC",
+        textColor: "#0F172A",
+        visualHint: "Subtle gradient with clean geometric shape"
+      });
+    }
+
+    if (prompt.includes("TEAM_LAYOUT_JSON")) {
+      return JSON.stringify({
+        template: "title-left-two-column",
+        regions: [
+          { id: "title", kind: "title", x: 0.08, y: 0.08, width: 0.84, height: 0.12 },
+          { id: "bullets", kind: "bullets", x: 0.08, y: 0.24, width: 0.52, height: 0.62 },
+          { id: "visual", kind: "visual", x: 0.64, y: 0.24, width: 0.28, height: 0.52 }
+        ]
+      });
+    }
+
     if (prompt.includes("VISUAL_JSON")) {
       return JSON.stringify([
         { type: "bar-chart", hint: "Use a 5-year trend chart", color: "blue" },

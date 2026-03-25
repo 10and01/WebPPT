@@ -129,6 +129,16 @@ npm run typecheck -w @web-ppt/shared
 - `POST /api/ai/decks/:deckId/visuals`：视觉建议
 - `POST /api/ai/decks/:deckId/outline`：生成大纲
 - `POST /api/ai/decks/:deckId/copy`：生成分页文案
+- `POST /api/ai/decks/:deckId/generate-by-outline`：按大纲生成整套页面（支持 agent team 编排）
+
+`generate-by-outline` 关键参数：
+- `orchestrationMode`：`auto` | `agent-team` | `single-agent`
+- `disableFallback`：是否禁用失败降级（默认 `false`）
+
+返回值中 `orchestration` 字段会标记：
+- 实际执行模式（`agent-team` 或 `single-agent`）
+- 是否触发降级
+- 阶段级校验问题与重试提示
 
 ### 导出
 

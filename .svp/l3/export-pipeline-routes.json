@@ -1,0 +1,55 @@
+{
+  "id": "export-pipeline-routes",
+  "name": "Export Pipeline and Route Job Unit",
+  "input": [
+    {
+      "name": "exportRequest",
+      "type": "ExportDeckRequest",
+      "source": "HTTP POST /api/exports"
+    },
+    {
+      "name": "deckSnapshot",
+      "type": "Deck",
+      "source": "data/deck-store.ts"
+    },
+    {
+      "name": "formatTarget",
+      "type": "\"html\" | \"pdf\" | \"png\" | \"pptx\"",
+      "source": "ExportDeckRequest.format"
+    }
+  ],
+  "output": [
+    {
+      "name": "exportJob",
+      "type": "ExportJob"
+    },
+    {
+      "name": "downloadArtifact",
+      "type": "{ singleFile?: string; files?: string[] }"
+    },
+    {
+      "name": "downloadEndpoints",
+      "type": "{ outputPath?: string; outputFiles?: string[] }"
+    }
+  ],
+  "validate": {
+    "v1": "deckId must resolve before enqueueing job",
+    "v2": "format must match supported export set",
+    "v3": "job status transitions follow pending->processing->completed|failed"
+  },
+  "constraints": [
+    "Job and artifact state are in-memory maps",
+    "Artifacts are written under packages/server/exports",
+    "Binary generation depends on puppeteer and pptxgenjs runtime availability"
+  ],
+  "description": "Handles async export job lifecycle and dispatches html/pdf/png/pptx generation services plus download routes.",
+  "contentHash": "8a9876854687f317",
+  "revision": {
+    "rev": 3,
+    "parentRev": 2,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T01:55:43.446Z"
+  }
+}

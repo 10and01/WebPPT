@@ -1,0 +1,64 @@
+{
+  "id": "ai-gateway-providers",
+  "name": "AI Gateway and Provider Orchestration Unit",
+  "input": [
+    {
+      "name": "deckGeneration",
+      "type": "GenerateDeckRequest",
+      "source": "HTTP POST /api/ai/decks/:deckId/generate"
+    },
+    {
+      "name": "polishText",
+      "type": "PolishTextRequest",
+      "source": "HTTP POST /api/ai/decks/:deckId/polish"
+    },
+    {
+      "name": "generateByOutline",
+      "type": "GenerateDeckFromOutlineRequest",
+      "source": "HTTP POST /api/ai/decks/:deckId/generate-by-outline"
+    },
+    {
+      "name": "providerConfig",
+      "type": "AIConfig",
+      "source": "Deck.aiConfig"
+    }
+  ],
+  "output": [
+    {
+      "name": "draftDeck",
+      "type": "GenerateDeckResponse"
+    },
+    {
+      "name": "structuredOutline",
+      "type": "GenerateStructuredOutlineResponse"
+    },
+    {
+      "name": "outlineDeck",
+      "type": "GenerateDeckFromOutlineResponse"
+    },
+    {
+      "name": "agentTeamArtifacts",
+      "type": "SlideAgentTeamResult"
+    }
+  ],
+  "validate": {
+    "v1": "toolPolicy must include generate-outline and append-slide-markdown when outline generation is requested",
+    "v2": "pages/slides are clamped to configured runtime limits",
+    "v3": "provider responses normalize to valid JSON-backed typed artifacts where required"
+  },
+  "constraints": [
+    "Provider dispatch supports OpenAI, Anthropic, and Mock fallback",
+    "Route layer wraps AI failures as 502 responses",
+    "Gateway retries transient generation failures"
+  ],
+  "description": "Coordinates AI route intents with provider-specific generation, normalization, and slide composition outputs.",
+  "contentHash": "810e576d6c996cbe",
+  "revision": {
+    "rev": 3,
+    "parentRev": 2,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T01:55:43.435Z"
+  }
+}

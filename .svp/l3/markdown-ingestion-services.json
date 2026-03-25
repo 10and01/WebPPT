@@ -1,0 +1,60 @@
+{
+  "id": "markdown-ingestion-services",
+  "name": "Markdown Ingestion and Page Tools Unit",
+  "input": [
+    {
+      "name": "importMarkdown",
+      "type": "ImportMarkdownRequest",
+      "source": "HTTP POST /api/markdown/decks/:deckId/import"
+    },
+    {
+      "name": "overwriteSlideMarkdown",
+      "type": "OverwriteSlideMarkdownRequest",
+      "source": "HTTP PUT markdown overwrite route"
+    },
+    {
+      "name": "appendSlideMarkdown",
+      "type": "AppendSlideMarkdownRequest",
+      "source": "HTTP POST markdown append route"
+    },
+    {
+      "name": "slideMarkdownText",
+      "type": "string",
+      "source": "services/markdown/slide-markdown.ts"
+    }
+  ],
+  "output": [
+    {
+      "name": "slideRead",
+      "type": "SlideMarkdownReadResponse"
+    },
+    {
+      "name": "overwriteResult",
+      "type": "{ deck: Deck; slide: Slide; markdown: string }"
+    },
+    {
+      "name": "parsedSlideElements",
+      "type": "{ title: string; elements: ElementModel[]; bgHtml?: string }"
+    }
+  ],
+  "validate": {
+    "v1": "markdown parser must preserve heading-derived title",
+    "v2": "table/chart/background fenced directives map into slide elements",
+    "v3": "page-targeted operations require existing deck and slide"
+  },
+  "constraints": [
+    "Markdown transformation is deterministic for same input",
+    "Element zIndex is normalized during overwrite",
+    "Runtime conversion supports text, shape, and image composition"
+  ],
+  "description": "Transforms markdown into slide model state and exposes page-scoped read/overwrite/append behaviors.",
+  "contentHash": "23318046e6975803",
+  "revision": {
+    "rev": 3,
+    "parentRev": 2,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T01:55:43.448Z"
+  }
+}

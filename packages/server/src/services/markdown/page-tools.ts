@@ -59,10 +59,11 @@ export function overwriteSlideMarkdown(
     return undefined;
   }
 
-  const { title, elements } = markdownToSlideElements(target.id, markdown);
+  const { title, elements, bgHtml } = markdownToSlideElements(target.id, markdown);
   const updatedSlide: Slide = {
     ...target,
     title,
+    bgHtml,
     elements: elements.map((element, index) => ({
       ...element,
       slideId: target.id,

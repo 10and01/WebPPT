@@ -1,0 +1,60 @@
+{
+  "id": "deck-crud-runtime",
+  "name": "Deck CRUD Runtime Unit",
+  "input": [
+    {
+      "name": "createDeck",
+      "type": "CreateDeckRequest",
+      "source": "HTTP POST /api/decks"
+    },
+    {
+      "name": "addSlide",
+      "type": "AddSlideRequest",
+      "source": "HTTP POST /api/decks/:deckId/slides"
+    },
+    {
+      "name": "replaceElements",
+      "type": "{ elements: ElementModel[] }",
+      "source": "HTTP PUT /api/decks/:deckId/slides/:slideId/elements"
+    },
+    {
+      "name": "updateAIConfig",
+      "type": "{ aiConfig: AIConfig }",
+      "source": "HTTP PUT /api/decks/:deckId/ai-config"
+    }
+  ],
+  "output": [
+    {
+      "name": "deckList",
+      "type": "{ decks: Deck[] }"
+    },
+    {
+      "name": "deckResult",
+      "type": "{ deck: Deck }"
+    },
+    {
+      "name": "slideResult",
+      "type": "{ slide: Slide }"
+    }
+  ],
+  "validate": {
+    "v1": "title and createdBy must be non-empty for deck creation",
+    "v2": "deckId and slideId must resolve to existing entities",
+    "v3": "elements payload must be treated as ElementModel[]"
+  },
+  "constraints": [
+    "In-memory persistence via data/deck-store",
+    "Deck version increments on mutating operations",
+    "Slide numbers re-index after deletion"
+  ],
+  "description": "Owns deck and slide CRUD behavior by combining routes/decks.ts with data/deck-store.ts.",
+  "contentHash": "072ba1abd79c6bb1",
+  "revision": {
+    "rev": 3,
+    "parentRev": 2,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T01:55:43.443Z"
+  }
+}

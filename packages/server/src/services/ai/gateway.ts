@@ -1,9 +1,17 @@
 import type {
   AIConfig,
   DeckThemeTemplate,
+  GenerateDeckFromOutlineRequest,
   GenerateDeckRequest,
   GenerateDeckResponse,
   GenerateSlideMarkdownFromOutlineRequest,
+  SlideAgentTeamResult,
+  SlideAgentTeamSlide,
+  SlideAgentTeamValidationIssue,
+  SlideBackgroundArtifact,
+  SlideCopyArtifact,
+  SlideLayoutArtifact,
+  SlideLayoutRegion,
   GenerateStructuredOutlineRequest,
   GenerateStructuredOutlineResponse,
   OutlineSlidePlan,
@@ -29,6 +37,12 @@ const SLIDE_LAYOUT_GOVERNANCE = [
   "只有在信息密度高或需要对比时使用表格。",
   "图片策略: 仅在能增强理解时添加 [图片建议: ...]，否则不强行配图。",
   "如内容跨层级，优先拆页而不是在一页放多段长段落。"
+].join("\n");
+
+const RICH_MARKDOWN_DIRECTIVES = [
+  "图表语法: [图表: 标题; 维度A=120; 维度B=90; 维度C=140]",
+  "强调文字颜色语法: [文字颜色:#0b5fff] 这是一句需要强调的文案",
+  "定制网页背景语法: 使用 ```background-html``` fenced code block，写可直接渲染的 HTML/CSS"
 ].join("\n");
 
 function normalizeHexColor(value: string | undefined, index: number): string {
@@ -202,6 +216,58 @@ function buildStructuredOutlineSchema(slides: number): Record<string, unknown> {
   };
 }
 
+function buildBackgroundArtifactSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      theme: { type: "string" },
+      bgColor: {
+        type: "string",
+        pattern: "^#[0-9a-fA-F]{6}$"
+      },
+      textColor: {
+        type: "string",
+        pattern: "^#[0-9a-fA-F]{6}$"
+      },
+      visualHint: { type: "string" }
+    },
+    required: ["theme", "bgColor", "textColor", "visualHint"]
+  };
+}
+
+function buildLayoutArtifactSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      template: { type: "string" },
+      regions: {
+        type: "array",
+        minItems: 3,
+        maxItems: 6,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string" },
+            kind: {
+              type: "string",
+              enum: ["title", "subtitle", "bullets", "visual", "notes"]
+            },
+            x: { type: "number", minimum: 0, maximum: 1 },
+            y: { type: "number", minimum: 0, maximum: 1 },
+            width: { type: "number", minimum: 0.05, maximum: 1 },
+            height: { type: "number", minimum: 0.05, maximum: 1 }
+          },
+          required: ["id", "kind", "x", "y", "width", "height"]
+        }
+      }
+    },
+    required: ["template", "regions"]
+  };
+}
+
 function parseStructuredOutline(
   text: string,
   topic: string,
@@ -249,6 +315,394 @@ function parseStructuredOutline(
     };
   } catch {
     return { topic, themeTemplate, slides: fallbackSlides };
+  }
+}
+
+function parseCopyArtifact(text: string, plan: OutlineSlidePlan): SlideCopyArtifact {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim().replace(/^[-*]\s*/, ""))
+    .filter(Boolean);
+
+  const bullets = lines.slice(0, 5);
+  while (bullets.length < 2) {
+    bullets.push(plan.keyPoints[bullets.length] || `补充要点 ${bullets.length + 1}`);
+  }
+
+  return {
+    index: plan.index,
+    title: plan.title,
+    bullets,
+    notes: plan.objective
+  };
+}
+
+function parseBackgroundArtifact(text: string, plan: OutlineSlidePlan, index: number): SlideBackgroundArtifact {
+  const fallback: SlideBackgroundArtifact = {
+    index: plan.index,
+    theme: `theme-${index + 1}`,
+    bgColor: normalizeHexColor(undefined, index),
+    textColor: "#0f172a",
+    visualHint: plan.visualStrategy
+  };
+
+  try {
+    const parsed = JSON.parse(cleanJsonText(text)) as {
+      theme?: string;
+      bgColor?: string;
+      textColor?: string;
+      visualHint?: string;
+    };
+
+    return {
+      index: plan.index,
+      theme: (parsed.theme || fallback.theme).trim(),
+      bgColor: normalizeHexColor(parsed.bgColor, index),
+      textColor: /^#[0-9a-fA-F]{6}$/.test(parsed.textColor || "") ? (parsed.textColor as string) : fallback.textColor,
+      visualHint: (parsed.visualHint || fallback.visualHint).trim()
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function fallbackLayoutRegions(): SlideLayoutRegion[] {
+  return [
+    { id: "title", kind: "title", x: 0.08, y: 0.08, width: 0.84, height: 0.12 },
+    { id: "bullets", kind: "bullets", x: 0.08, y: 0.24, width: 0.52, height: 0.64 },
+    { id: "visual", kind: "visual", x: 0.64, y: 0.24, width: 0.28, height: 0.52 }
+  ];
+}
+
+function parseLayoutArtifact(text: string, plan: OutlineSlidePlan): SlideLayoutArtifact {
+  const fallback: SlideLayoutArtifact = {
+    index: plan.index,
+    template: "two-column",
+    regions: fallbackLayoutRegions()
+  };
+
+  try {
+    const parsed = JSON.parse(cleanJsonText(text)) as {
+      template?: string;
+      regions?: SlideLayoutRegion[];
+    };
+
+    if (!Array.isArray(parsed.regions) || !parsed.regions.length) {
+      return fallback;
+    }
+
+    return {
+      index: plan.index,
+      template: (parsed.template || fallback.template).trim(),
+      regions: parsed.regions
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const clean = hex.replace("#", "");
+  const r = Number.parseInt(clean.slice(0, 2), 16);
+  const g = Number.parseInt(clean.slice(2, 4), 16);
+  const b = Number.parseInt(clean.slice(4, 6), 16);
+  return { r, g, b };
+}
+
+function relativeLuminance(hex: string): number {
+  const { r, g, b } = hexToRgb(hex);
+  const transform = (v: number) => {
+    const scaled = v / 255;
+    return scaled <= 0.03928 ? scaled / 12.92 : Math.pow((scaled + 0.055) / 1.055, 2.4);
+  };
+
+  const R = transform(r);
+  const G = transform(g);
+  const B = transform(b);
+  return 0.2126 * R + 0.7152 * G + 0.0722 * B;
+}
+
+function contrastRatio(colorA: string, colorB: string): number {
+  const l1 = relativeLuminance(colorA);
+  const l2 = relativeLuminance(colorB);
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function overlap(a: SlideLayoutRegion, b: SlideLayoutRegion): boolean {
+  const ax2 = a.x + a.width;
+  const ay2 = a.y + a.height;
+  const bx2 = b.x + b.width;
+  const by2 = b.y + b.height;
+  return a.x < bx2 && ax2 > b.x && a.y < by2 && ay2 > b.y;
+}
+
+function buildValidationIssues(input: {
+  outline: GenerateStructuredOutlineResponse;
+  copies: SlideCopyArtifact[];
+  backgrounds: SlideBackgroundArtifact[];
+  layouts: SlideLayoutArtifact[];
+}): SlideAgentTeamValidationIssue[] {
+  const issues: SlideAgentTeamValidationIssue[] = [];
+
+  if (!input.outline.slides.length) {
+    issues.push({
+      code: "OUTLINE_MISSING",
+      stage: "outline",
+      message: "Outline stage returned no slides.",
+      retryHint: "Regenerate outline with explicit pages and topic."
+    });
+  }
+
+  const expectedPages = input.outline.slides.length;
+  if (input.copies.length !== expectedPages || input.backgrounds.length !== expectedPages || input.layouts.length !== expectedPages) {
+    issues.push({
+      code: "PAGE_COUNT_MISMATCH",
+      stage: "compose",
+      message: "Artifact page counts are inconsistent between stages.",
+      retryHint: "Retry copy/background/layout generation for missing pages."
+    });
+  }
+
+  input.copies.forEach((copy) => {
+    if (!copy.title.trim() || copy.bullets.length < 2) {
+      issues.push({
+        code: "COPY_INCOMPLETE",
+        stage: "copy",
+        slideIndex: copy.index,
+        message: `Slide ${copy.index} copy is incomplete.`,
+        retryHint: "Ensure each page has title and at least two bullets."
+      });
+    }
+  });
+
+  input.backgrounds.forEach((background) => {
+    const ratio = contrastRatio(background.bgColor, background.textColor);
+    if (ratio < 3) {
+      issues.push({
+        code: "BACKGROUND_READABILITY",
+        stage: "background",
+        slideIndex: background.index,
+        message: `Slide ${background.index} contrast ratio (${ratio.toFixed(2)}) is too low.`,
+        retryHint: "Use higher-contrast text and background colors."
+      });
+    }
+  });
+
+  input.layouts.forEach((layout) => {
+    const invalidBounds = layout.regions.some(
+      (region) => region.x < 0 || region.y < 0 || region.width <= 0 || region.height <= 0 || region.x + region.width > 1 || region.y + region.height > 1
+    );
+
+    const hasOverlap = layout.regions.some((region, idx) => layout.regions.slice(idx + 1).some((next) => overlap(region, next)));
+
+    if (invalidBounds || hasOverlap) {
+      issues.push({
+        code: "LAYOUT_INVALID",
+        stage: "layout",
+        slideIndex: layout.index,
+        message: `Slide ${layout.index} layout has invalid bounds or overlapping regions.`,
+        retryHint: "Regenerate layout with non-overlapping regions inside 0-1 bounds."
+      });
+    }
+  });
+
+  return issues;
+}
+
+function getFaultFlags(requirements?: string): { missingOutline: boolean; pageMismatch: boolean; invalidLayout: boolean } {
+  const text = (requirements || "").toLowerCase();
+  return {
+    missingOutline: text.includes("[team-fault:missing-outline]"),
+    pageMismatch: text.includes("[team-fault:page-mismatch]"),
+    invalidLayout: text.includes("[team-fault:invalid-layout]")
+  };
+}
+
+function buildSlideMarkdownFromCopy(copy: SlideCopyArtifact): string {
+  const bullets = copy.bullets.map((bullet) => `- ${bullet}`).join("\n");
+  return `# ${copy.title}\n\n${bullets}`;
+}
+
+export async function generateDeckByAgentTeam(
+  config: AIConfig,
+  input: GenerateDeckFromOutlineRequest
+): Promise<{ outline: GenerateStructuredOutlineResponse; orchestration: SlideAgentTeamResult }> {
+  const pages = Math.max(1, Math.min(input.pages || 1, 30));
+  const themeTemplate = input.themeTemplate || "business";
+  const provider = createProvider(config);
+  const faults = getFaultFlags(input.requirements);
+
+  const buildFallback = async (issues: SlideAgentTeamValidationIssue[]): Promise<{ outline: GenerateStructuredOutlineResponse; orchestration: SlideAgentTeamResult }> => {
+    const outline = await generateStructuredOutline(config, {
+      topic: input.topic,
+      pages,
+      requirements: input.requirements,
+      themeTemplate
+    });
+
+    const copies = await Promise.all(
+      outline.slides.map(async (plan) => {
+        const content = await generatePaginatedCopy(config, input.topic, outline.slides.map((item) => item.title).join(" | "), plan.index - 1);
+        return parseCopyArtifact(content, plan);
+      })
+    );
+
+    const backgrounds = outline.slides.map((plan, index) => ({
+      index: plan.index,
+      theme: `${themeTemplate}-fallback`,
+      bgColor: normalizeHexColor(undefined, index),
+      textColor: "#0f172a",
+      visualHint: plan.visualStrategy
+    }));
+
+    const layouts = outline.slides.map((plan) => ({
+      index: plan.index,
+      template: "two-column",
+      regions: fallbackLayoutRegions()
+    }));
+
+    const slides: SlideAgentTeamSlide[] = outline.slides.map((plan, index) => ({
+      index: plan.index,
+      title: plan.title,
+      markdown: buildSlideMarkdownFromCopy(copies[index]),
+      copy: copies[index],
+      background: backgrounds[index],
+      layout: layouts[index]
+    }));
+
+    return {
+      outline,
+      orchestration: {
+        mode: "single-agent",
+        fallbackTriggered: true,
+        issues,
+        slides
+      }
+    };
+  };
+
+  try {
+    const outline = await generateStructuredOutline(config, {
+      topic: input.topic,
+      pages,
+      requirements: input.requirements,
+      themeTemplate
+    });
+
+    if (faults.missingOutline) {
+      outline.slides = [];
+    }
+
+    const copies = await Promise.all(
+      outline.slides.map(async (plan) => {
+        const content = await generatePaginatedCopy(config, input.topic, outline.slides.map((item) => item.title).join(" | "), plan.index - 1);
+        return parseCopyArtifact(content, plan);
+      })
+    );
+
+    if (faults.pageMismatch && copies.length > 1) {
+      copies.pop();
+    }
+
+    const visualPairs = await Promise.all(
+      outline.slides.map(async (plan, index) => {
+        const [backgroundText, layoutText] = await Promise.all([
+          provider.generate(
+            [
+              "TEAM_BACKGROUND_JSON",
+              "你是PPT背景设计助手，只能输出JSON。",
+              `风格模板: ${THEME_PROFILE[themeTemplate]}`,
+              `页标题: ${plan.title}`,
+              `目标: ${plan.objective}`,
+              `视觉策略: ${plan.visualStrategy}`
+            ].join("\n"),
+            {
+              model: config.model,
+              temperature: config.temperature ?? 0.5,
+              maxTokens: config.maxTokens ?? 600,
+              jsonSchema: buildBackgroundArtifactSchema()
+            }
+          ),
+          provider.generate(
+            [
+              "TEAM_LAYOUT_JSON",
+              "你是PPT布局助手，只能输出JSON。",
+              `页标题: ${plan.title}`,
+              `要点数量: ${Math.max(2, plan.keyPoints.length)}`,
+              "坐标使用 0-1 相对值，避免重叠。"
+            ].join("\n"),
+            {
+              model: config.model,
+              temperature: config.temperature ?? 0.3,
+              maxTokens: config.maxTokens ?? 800,
+              jsonSchema: buildLayoutArtifactSchema()
+            }
+          )
+        ]);
+
+        return {
+          background: parseBackgroundArtifact(backgroundText, plan, index),
+          layout: parseLayoutArtifact(layoutText, plan)
+        };
+      })
+    );
+
+    const backgrounds = visualPairs.map((pair) => pair.background);
+    const layouts = visualPairs.map((pair) => pair.layout);
+
+    if (faults.invalidLayout && layouts[0]) {
+      layouts[0] = {
+        ...layouts[0],
+        regions: [
+          { id: "title", kind: "title", x: 0.1, y: 0.1, width: 0.8, height: 0.3 },
+          { id: "bullets", kind: "bullets", x: 0.2, y: 0.2, width: 0.8, height: 0.4 }
+        ]
+      };
+    }
+
+    const issues = buildValidationIssues({ outline, copies, backgrounds, layouts });
+    if (issues.length) {
+      if (input.disableFallback) {
+        throw new Error(`Agent team validation failed: ${issues.map((item) => item.code).join(", ")}`);
+      }
+      return buildFallback(issues);
+    }
+
+    const slides: SlideAgentTeamSlide[] = outline.slides.map((plan, index) => ({
+      index: plan.index,
+      title: plan.title,
+      markdown: buildSlideMarkdownFromCopy(copies[index]),
+      copy: copies[index],
+      background: backgrounds[index],
+      layout: layouts[index]
+    }));
+
+    return {
+      outline,
+      orchestration: {
+        mode: "agent-team",
+        fallbackTriggered: false,
+        issues: [],
+        slides
+      }
+    };
+  } catch (error) {
+    if (input.disableFallback) {
+      throw error;
+    }
+
+    const issues: SlideAgentTeamValidationIssue[] = [
+      {
+        code: "OUTLINE_MISSING",
+        stage: "outline",
+        message: `Agent team failed: ${(error as Error).message}`,
+        retryHint: "Retry with clearer topic and page count."
+      }
+    ];
+
+    return buildFallback(issues);
   }
 }
 
@@ -486,6 +940,7 @@ export async function generateSlideMarkdownFromOutline(
       "第一行必须是 # 标题。",
       "正文优先列表结构，每页 3-5 要点。",
       "如需图片，在末尾加一行 [图片建议: ...]。",
+      `可选增强语法:\n${RICH_MARKDOWN_DIRECTIVES}`,
       "必须遵循以下版式治理规则:",
       SLIDE_LAYOUT_GOVERNANCE
     ].join("\n");
@@ -544,9 +999,11 @@ export async function generateRichMarkdown(
 5. 用 > 创建引用块（强调重要信息）
 6. 用 **粗体** 或 *斜体* 强调文本
 7. 用 ### 卡片标题 来组织相关内容
-8. 图表/流程图用描述性语言说明，如"[流程图：A → B → C]"
-9. 要求内容清晰、层级分明、易于转换为演示幻灯片
-10. 每个模块应该能独立成为一张或多张幻灯片`;
+8. 图表请使用语法：[图表: 标题; 维度A=120; 维度B=90]
+9. 强调文字颜色请使用语法：[文字颜色:#0b5fff] 文案
+10. 网页背景请使用 fenced code（三个反引号 + background-html）并在代码块中写HTML
+11. 要求内容清晰、层级分明、易于转换为演示幻灯片
+12. 每个模块应该能独立成为一张或多张幻灯片`;
 
     const prompt = [
       "你是专业的内容策划助手，擅长生成结构化的Markdown文档。",
@@ -586,7 +1043,10 @@ export async function rewriteSlideMarkdown(
       "1) 第一行必须是 # 标题",
       "2) 正文使用段落和列表组织",
       "3) 如果用户要求添加图片，请在末尾增加一行 [图片建议: xxx]",
-      "4) 不要使用代码块包裹Markdown"
+      "4) 如需图表，使用 [图表: 标题; 指标A=120; 指标B=90]",
+      "5) 如需彩色强调文字，使用 [文字颜色:#0b5fff] 文案",
+      "6) 如需网页背景，请用 ```background-html``` 代码块输出背景HTML",
+      "7) 不要使用代码块包裹整页Markdown（背景HTML代码块除外）"
     ].join("\n");
 
     const text = await provider.generate(prompt, {

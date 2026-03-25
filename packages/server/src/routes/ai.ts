@@ -14,6 +14,7 @@ import type {
 } from "@web-ppt/shared";
 import { deckStore } from "../data/deck-store";
 import {
+  generateDeckByAgentTeam,
   generateDeckDraft,
   generateSlideMarkdownFromOutline,
   generateStructuredOutline,
@@ -34,6 +35,16 @@ import {
 const DEFAULT_SLIDE_BG = "#ffffff";
 const BEAUTIFIED_BG = "#eef6ff";
 
+function extractBackgroundHtml(markdown: string): string | undefined {
+  const fenced = markdown.match(/```(?:background-html|bg-html|slide-bg-html)\s*([\s\S]*?)```/i);
+  if (!fenced?.[1]) {
+    return undefined;
+  }
+
+  const html = fenced[1].trim();
+  return html || undefined;
+}
+
 function normalizeToolPolicy(input?: AIToolPolicy): AIToolPolicy {
   const defaults: AIToolPolicy = {
     allowedTools: ["generate-outline", "read-slide-markdown", "overwrite-slide-markdown", "append-slide-markdown"]
@@ -46,6 +57,33 @@ function normalizeToolPolicy(input?: AIToolPolicy): AIToolPolicy {
   return {
     allowedTools: input.allowedTools
   };
+}
+
+function shouldUseAgentTeamMode(input: GenerateDeckFromOutlineRequest): boolean {
+  if (input.orchestrationMode === "agent-team") {
+    return true;
+  }
+
+  if (input.orchestrationMode === "single-agent") {
+    return false;
+  }
+
+  const source = `${input.topic || ""} ${input.requirements || ""}`.toLowerCase();
+  const keywords = [
+    "multi-agent",
+    "agent team",
+    "outline",
+    "copy",
+    "background",
+    "layout",
+    "大纲",
+    "文案",
+    "背景",
+    "排版",
+    "布局"
+  ];
+
+  return keywords.some((keyword) => source.includes(keyword));
 }
 
 function buildAiImageElement(slideId: string, promptText: string, zIndex: number): ElementModel {
@@ -311,6 +349,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       const shouldAddImage = /图片|image|配图/i.test(instruction);
       const shouldBeautifyBg = /背景|bg|background|美化/i.test(instruction);
       const imageHint = (markdown.match(/\[图片建议:\s*([^\]]+)\]/)?.[1] || instruction).trim();
+      const backgroundHtml = extractBackgroundHtml(markdown);
 
       const nextElements = rewrittenSlide.elements.map((element, index) => ({
         ...element,
@@ -324,6 +363,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       const updatedSlide: Slide = {
         ...rewrittenSlide,
         bgColor: shouldBeautifyBg ? BEAUTIFIED_BG : rewrittenSlide.bgColor || DEFAULT_SLIDE_BG,
+        bgHtml: backgroundHtml ?? rewrittenSlide.bgHtml,
         elements: nextElements,
         updatedAt: Date.now()
       };

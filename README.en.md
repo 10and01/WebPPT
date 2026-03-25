@@ -131,6 +131,16 @@ If provider config is incomplete (for example missing `apiKey`), the backend aut
 - `POST /api/ai/decks/:deckId/visuals`: get visual suggestions
 - `POST /api/ai/decks/:deckId/outline`: generate outline
 - `POST /api/ai/decks/:deckId/copy`: generate paginated copy
+- `POST /api/ai/decks/:deckId/generate-by-outline`: generate full slides from outline (supports agent-team orchestration)
+
+Key `generate-by-outline` fields:
+- `orchestrationMode`: `auto` | `agent-team` | `single-agent`
+- `disableFallback`: disable fallback when orchestration fails (default `false`)
+
+Response `orchestration` metadata includes:
+- actual mode used (`agent-team` or `single-agent`)
+- whether fallback was triggered
+- stage-level validation issues and retry hints
 
 ### Export
 

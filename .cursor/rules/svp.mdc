@@ -1,0 +1,172 @@
+---
+description: SVP structured AI-assisted development protocol
+globs: .svp/**
+alwaysApply: true
+---
+## SVP — Semantic Voxel Protocol
+
+This project uses SVP for structured AI-assisted development.
+
+### Five-Layer Model
+
+```
+L5 Blueprint  ──aggregates──→  L4 Artifact  ──aggregates──→  L3 Block  ←1:1 pair→  L2 Code  ──aggregates──→  L1 Source
+(Intent)                    (Logic chains)               (Contract)              (Mapping)               (Code)
+```
+
+### .svp/ Directory Structure
+
+```
+.svp/
+├── l5.json          # L5 Blueprint (globally unique)
+├── l4/              # L4 Artifact files (flow / event-graph / state-machine)
+│   └── <artifact-id>.json
+├── l3/              # L3 Block contracts
+│   └── <block-id>.json
+└── l2/              # L2 Code block mappings
+    └── <block-id>.json
+```
+
+### Modular Documentation (docs.md)
+
+Each node/graph can have an optional `docs.md` for rich context beyond `description`:
+
+```
+nodes/<block-id>/
+├── node.yaml        # Contract
+└── docs.md          # Optional: design intent, edge cases, error strategy, integration notes
+graphs/
+├── <name>.yaml
+└── <name>.docs.md   # Optional: graph-level documentation
+```
+
+- `docs.md` is auto-loaded into compile/recompile/review prompts
+- Does NOT affect contentHash — it's supplementary, not contractual
+- Use it for: design intent, edge cases, error strategy, integration notes, examples
+
+### Reference Materials (refs/)
+
+Each node/graph can have an optional `refs/` folder for arbitrary reference files (mockups, algorithm specs, reference implementations, etc.):
+
+```
+nodes/<block-id>/
+├── docs.md          # Optional: supplementary documentation
+└── refs/            # Optional: reference materials folder
+    ├── design.png   # UI mockup
+    ├── algorithm.md # Algorithm spec
+    └── reference.ts # Reference implementation
+```
+
+- Text files (.md/.ts/.py etc.) are inlined into the prompt
+- Binary files (.png/.pdf etc.) are listed by path
+- Does NOT affect contentHash, and is NOT checked by `forge docs check`
+- Auto-loaded into compile/recompile/review prompts
+
+### AI vs Toolchain Scope
+
+| Scope | Operation | Method |
+|-------|-----------|--------|
+| **AI** | Design L5/L4/L3 specs | `forge prompt design-*` → subagent |
+| **AI** | Compile L3→L1 code | `forge prompt compile/recompile` → subagent |
+| **AI** | Review drift | `forge prompt review` → subagent |
+| **AI** | Fix broken references | `forge prompt update-ref` → subagent |
+| **AI** | Reverse-engineer from code | `forge prompt scan` → subagent |
+| **Toolchain** | Validate consistency | `forge check` |
+| **Toolchain** | Render layer views | `forge view` |
+| **Toolchain** | Generate compile task list | `forge compile-plan` |
+| **Toolchain** | Create/update L2 mapping | `forge link` |
+| **Toolchain** | Recompute hash | `forge rehash` |
+
+Core Principle: AI only does what requires creativity or judgment. All mechanical operations go to the toolchain CLI.
+
+### Subagent Complexity Tiers
+
+SVP prompts include a `complexity` front-matter field indicating task difficulty:
+
+| Tier | Meaning | Model |
+|------|---------|-------|
+| `heavy` | High creativity, architecture decisions | strongest model |
+| `standard` | Normal implementation and review | balanced model |
+| `light` | Mechanical fixes, docs, reference updates | fastest model |
+
+When dispatching a subagent, read the `complexity` field from the prompt output
+and pass the corresponding model parameter.
+
+### Subagent Dispatch Pattern
+
+```
+1. Run forge prompt <action> <id> [options]  to get the prompt
+2. Read the complexity field in the prompt header to select model tier
+3. Dispatch stdout output to subagent for execution
+4. After subagent completes, run forge link / forge rehash / forge check
+```
+
+### Available CLI Commands
+
+| Command | Description |
+|---|---|
+| `forge view l5/l4/l3/l2` | View layer data in AI-friendly format |
+| `forge check` | Validate cross-layer consistency |
+| `forge compile-plan` | Detect changes and generate recompile tasks |
+| `forge rehash [target]` | Recompute contentHash + bump revision |
+| `forge link <l3-id> --files <paths>` | Create/update L2 code block mapping |
+| `forge prompt <action> <id>` | Generate context-aware AI prompt to stdout |
+| `forge changeset start <name> --reason "..."` | Start changeset, snapshot baseline |
+| `forge changeset complete` | Complete active changeset, compute diff |
+| `forge changeset list` | List all changesets |
+| `forge changeset view [id]` | View changeset diff (defaults to active) |
+| `forge changeset abandon [id]` | Abandon active changeset |
+
+### Prompt Commands
+
+| Command | Description |
+|---|---|
+| `forge prompt compile <l3-id>` | Generate compile prompt for L3→L1 |
+| `forge prompt recompile <l3-id>` | Generate recompile prompt (L3 changed) |
+| `forge prompt review <l3-id>` | Generate review prompt (L1 drift) |
+| `forge prompt update-ref <l4-id>` | Generate fix prompt for broken L4→L3 refs |
+| `forge prompt design-l5 --intent "..."` | Generate L5 design prompt |
+| `forge prompt design-l4 --intent "..." [--kind flow|event-graph|state-machine]` | Generate L4 design prompt |
+| `forge prompt design-l3 <id> --flow <fid> --step <n> --intent "..."` | Generate L3 design prompt |
+| `forge prompt scan [--dir <path>] [--intent "..."]` | Reverse-engineer SVP from existing code (auto-detects phase) |
+
+### Slash Commands
+
+| Command | When to use |
+|---|---|
+| `/forge` | Unified entry point — auto-diagnoses project state, routes to Build/Add/Change/Fix/View mode |
+
+Toolchain operations run CLI directly: `forge check`, `forge view l3`, etc.
+
+### Core Rules
+
+1. **Layered penetration**: Work top-down only. Never modify upper layers to fix lower layers.
+2. **Context isolation**: Main agent stays at L5+L4 (~30 lines). L3 design and L2+L1 compile dispatched to subagents.
+3. **Hash management**: Write `"placeholder"` for contentHash in JSON. Run `forge rehash` to fix.
+4. **L2 creation**: After generating L1 code, run `forge link <l3-id> --files <paths>` to create L2 mapping.
+5. **Verification**: Run `forge check` after each layer to ensure consistency.
+
+### L3 Contract Box Model
+
+```
+validate   → constrains INPUT (natural language rules per field path)
+constraints → constrains OUTPUT (natural language assertions)
+description → describes the MIDDLE (transformation logic)
+```
+
+### JSON Schema Quick Reference
+
+**L5Blueprint**: `{ id, name, version, intent, constraints[], domains[], integrations[], contentHash, revision }`
+**L4Flow**: `{ kind?: "flow", id, name, trigger?, steps[], dataFlows[], contentHash, revision }`
+**L4EventGraph**: `{ kind: "event-graph", id, name, state: {key: {type, description}}, handlers: [{id, event, steps[], dataFlows[]}], contentHash, revision }`
+**L4StateMachine**: `{ kind: "state-machine", id, name, entity, initialState, states: {name: {onEntry?, onExit?}}, transitions: [{from, to, event, guard?}], contentHash, revision }`
+**L3Block**: `{ id, name, input: Pin[], output: Pin[], validate: {}, constraints[], description, contentHash, revision }`
+**L2CodeBlock**: `{ id, blockRef, language, files[], sourceHash, contentHash, revision }`
+
+### L4 Variant Selection Guide
+
+| Variant | `kind` | Use when |
+|---|---|---|
+| **Flow** | `"flow"` (default) | Request-response pipeline: trigger → step chain → result |
+| **EventGraph** | `"event-graph"` | Event-driven / reactive: shared state + multiple event handlers |
+| **StateMachine** | `"state-machine"` | Entity lifecycle: states + transitions + guards |

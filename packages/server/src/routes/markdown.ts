@@ -34,32 +34,49 @@ function makeSlide(deckId: string, title: string, slideNumber: number): Slide {
     slideNumber,
     title,
     bgColor: "#ffffff",
+    bgHtml: undefined,
     elements: [],
     createdAt: now,
     updatedAt: now
   };
 }
 
-function makeTextElement(slideId: string, text: string, y: number): ElementModel {
-  const fontSize = 24;
+function makeTextElement(
+  slideId: string,
+  text: string,
+  y: number,
+  options?: {
+    fontSize?: number;
+    fontWeight?: number;
+    color?: string;
+    x?: number;
+    width?: number;
+  }
+): ElementModel {
+  const fontSize = options?.fontSize ?? 24;
+  const fontWeight = options?.fontWeight ?? 500;
+  const color = options?.color || "#0f172a";
+  const x = options?.x ?? CONTENT_X;
+  const width = options?.width ?? CONTENT_W;
   return {
     id: nanoid(),
     slideId,
     type: "text",
-    x: CONTENT_X,
+    x,
     y,
-    width: CONTENT_W,
+    width,
     height: estimateTextHeight(text, fontSize, 42),
     rotate: 0,
     zIndex: 1,
     content: { text },
     style: {
-      fill: "#0f172a",
+      fill: color,
       stroke: "transparent",
       strokeWidth: 0,
       opacity: 1,
       fontSize,
-      fontWeight: 500,
+      fontWeight,
+      color,
       textAlign: "left"
     }
   };
@@ -135,6 +152,119 @@ function makeCodeBlockElements(slideId: string, codeText: string, y: number): El
   };
 
   return [box, text];
+}
+
+function parseColoredText(line: string): { text: string; color?: string } {
+  const trimmed = (line || "").trim();
+  const colorTagged = trimmed.match(/^\[文字颜色\s*:\s*(#[0-9a-fA-F]{6})\]\s*(.+)$/);
+  if (colorTagged) {
+    return { text: colorTagged[2].trim(), color: colorTagged[1] };
+  }
+
+  const colorTaggedEn = trimmed.match(/^\[text-color\s*:\s*(#[0-9a-fA-F]{6})\]\s*(.+)$/i);
+  if (colorTaggedEn) {
+    return { text: colorTaggedEn[2].trim(), color: colorTaggedEn[1] };
+  }
+
+  return { text: trimmed };
+}
+
+function parseChartDirective(line: string): {
+  title: string;
+  points: Array<{ label: string; value: number }>;
+} | null {
+  const match = line.match(/^\[(图表|chart)\s*:\s*(.+)\]$/i);
+  if (!match) {
+    return null;
+  }
+
+  const payload = match[2].trim();
+  const parts = payload.split(/[;,|]/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const title = parts[0];
+  const points: Array<{ label: string; value: number }> = [];
+  for (let i = 1; i < parts.length; i += 1) {
+    const item = parts[i];
+    const point = item.match(/^([^:=]+)\s*[:=]\s*(-?\d+(?:\.\d+)?)$/);
+    if (!point) {
+      continue;
+    }
+
+    points.push({
+      label: point[1].trim(),
+      value: Number(point[2])
+    });
+  }
+
+  if (!points.length) {
+    return null;
+  }
+
+  return { title, points: points.slice(0, 6) };
+}
+
+function makeSimpleBarChartElements(
+  slideId: string,
+  chart: { title: string; points: Array<{ label: string; value: number }> },
+  y: number
+): ElementModel[] {
+  const elements: ElementModel[] = [];
+  const titleElement = makeTextElement(slideId, chart.title, y, { fontSize: 20, fontWeight: 700 });
+  elements.push(titleElement);
+
+  const maxValue = Math.max(1, ...chart.points.map((point) => point.value));
+  const chartTop = y + titleElement.height + 8;
+  const barAreaWidth = CONTENT_W - 140;
+  const barHeight = 28;
+  const rowGap = 12;
+
+  chart.points.forEach((point, index) => {
+    const rowY = chartTop + index * (barHeight + rowGap);
+    const barWidth = Math.max(24, Math.round((Math.max(0, point.value) / maxValue) * barAreaWidth));
+
+    elements.push(
+      makeTextElement(slideId, point.label, rowY + 2, {
+        fontSize: 16,
+        fontWeight: 500,
+        x: CONTENT_X,
+        width: 120
+      })
+    );
+
+    elements.push({
+      id: nanoid(),
+      slideId,
+      type: "shape",
+      x: CONTENT_X + 128,
+      y: rowY,
+      width: barWidth,
+      height: barHeight,
+      rotate: 0,
+      zIndex: 1,
+      content: { shapeKind: "roundRect" },
+      style: {
+        fill: "#3b82f6",
+        stroke: "#1d4ed8",
+        strokeWidth: 1,
+        opacity: 0.92,
+        borderRadius: 8
+      }
+    });
+
+    elements.push(
+      makeTextElement(slideId, String(point.value), rowY + 3, {
+        fontSize: 15,
+        fontWeight: 600,
+        x: CONTENT_X + 136 + barWidth,
+        width: 100
+      })
+    );
+  });
+
+  return elements;
 }
 
 function flattenInline(value: unknown): string {
@@ -333,10 +463,36 @@ export async function markdownRoutes(app: FastifyInstance): Promise<void> {
           continue;
         }
 
+        if (token.type === "heading" && token.depth > 1) {
+          ensureSlide();
+          const level = Math.min(4, Number(token.depth || 2));
+          const fontSize = Math.max(20, 30 - level * 2);
+          const headingText = String(token.text || "Section");
+          const el = makeTextElement(current!.id, headingText, lineY, { fontSize, fontWeight: 700 });
+          ensureSpace(el.height + 10);
+          appendElement({ ...el, y: lineY });
+          lineY += el.height + 10;
+          continue;
+        }
+
         ensureSlide();
 
         if (token.type === "paragraph") {
-          const el = makeTextElement(current!.id, token.text, lineY);
+          const paragraphText = String(token.text || "").trim();
+          const chart = parseChartDirective(paragraphText);
+          if (chart) {
+            const previewHeight = Math.max(120, chart.points.length * 40 + 56);
+            ensureSpace(previewHeight + 10);
+            const chartElements = makeSimpleBarChartElements(current!.id, chart, lineY);
+            for (const chartElement of chartElements) {
+              appendElement(chartElement);
+            }
+            lineY += previewHeight + 10;
+            continue;
+          }
+
+          const colored = parseColoredText(paragraphText);
+          const el = makeTextElement(current!.id, colored.text, lineY, { color: colored.color });
           ensureSpace(el.height + 10);
           appendElement({ ...el, y: lineY });
           lineY += el.height + 10;
@@ -345,7 +501,12 @@ export async function markdownRoutes(app: FastifyInstance): Promise<void> {
         if (token.type === "list") {
           for (const item of token.items || []) {
             const level = Number(item.depth || 0) - 1;
-            const el = makeListElement(current!.id, item.text || "", lineY, level);
+            const colored = parseColoredText(item.text || "");
+            const el = makeListElement(current!.id, colored.text, lineY, level);
+            if (colored.color) {
+              el.style.fill = colored.color;
+              el.style.color = colored.color;
+            }
             ensureSpace(el.height + 8);
             appendElement({ ...el, y: lineY });
             lineY += el.height + 8;
@@ -353,6 +514,13 @@ export async function markdownRoutes(app: FastifyInstance): Promise<void> {
         }
 
         if (token.type === "code") {
+          const normalizedLang = String(token.lang || "").trim().toLowerCase();
+          if (["background-html", "bg-html", "slide-bg-html"].includes(normalizedLang)) {
+            ensureSlide();
+            current!.bgHtml = String(token.text || "").trim() || undefined;
+            continue;
+          }
+
           const label = token.lang ? `// ${token.lang}` : "// code";
           const code = `${label}\n${token.text || ""}`;
           const previewHeight = Math.min(220, Math.max(90, estimateTextHeight(code, 16, 65) + 24));
@@ -380,6 +548,24 @@ export async function markdownRoutes(app: FastifyInstance): Promise<void> {
             appendElement(e);
           }
           lineY += required;
+        }
+
+        if (token.type === "blockquote") {
+          const quoteText = (token.tokens || [])
+            .map((item: any) => String(item?.text || "").trim())
+            .filter(Boolean)
+            .join(" ");
+
+          if (quoteText) {
+            const quoteEl = makeTextElement(current!.id, `❝ ${quoteText}`, lineY, {
+              fontSize: 20,
+              fontWeight: 600,
+              color: "#0b5fff"
+            });
+            ensureSpace(quoteEl.height + 10);
+            appendElement({ ...quoteEl, y: lineY });
+            lineY += quoteEl.height + 10;
+          }
         }
       }
 

@@ -1,0 +1,55 @@
+{
+  "id": "collaboration-session-hub",
+  "name": "Collaboration Hub and Session Recovery Unit",
+  "input": [
+    {
+      "name": "wsConnect",
+      "type": "{ deckId: string; userId: string; userName: string; role: PermissionRole }",
+      "source": "GET /ws/collab query"
+    },
+    {
+      "name": "wsMessage",
+      "type": "{ type: \"update\" | \"page\" | \"cursor\" | \"ping\"; payload: unknown }",
+      "source": "collab/hub.ts socket.on(message)"
+    },
+    {
+      "name": "yDocState",
+      "type": "Y.Doc",
+      "source": "yjs runtime"
+    }
+  ],
+  "output": [
+    {
+      "name": "syncEnvelope",
+      "type": "{ type: \"sync\"; payload: { update: string; collaborators: Array<{ userId: string; userName: string; role: PermissionRole; activeSlideId?: string }>; deckId: string; userId: string } }"
+    },
+    {
+      "name": "presenceEnvelope",
+      "type": "{ type: \"presence\"; payload: { collaborators: CollaboratorPresence[] } }"
+    },
+    {
+      "name": "sessionRecoveryState",
+      "type": "SessionRecoveryState"
+    }
+  ],
+  "validate": {
+    "v1": "viewer role cannot emit update mutations",
+    "v2": "incoming update payload must decode from base64 before Y.applyUpdate",
+    "v3": "invalid socket messages return structured error envelope"
+  },
+  "constraints": [
+    "Collaborator/client/session/doc stores are in-memory",
+    "Heartbeat timeout removes stale clients after 60s inactivity",
+    "Session cleanup applies max-age retention policy"
+  ],
+  "description": "Maintains collaborative Yjs document sync, presence fan-out, and per-user session recovery snapshots.",
+  "contentHash": "035255f881e6597b",
+  "revision": {
+    "rev": 3,
+    "parentRev": 2,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T01:55:43.441Z"
+  }
+}

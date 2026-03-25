@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { AIConfig } from "@web-ppt/shared";
 import {
+  generateDeckByAgentTeam,
   generateDeckDraft,
   generateOutline,
   generateSlideMarkdownFromOutline,
@@ -100,5 +101,60 @@ describe("AI Gateway Fault Tolerance", () => {
 
     expect(markdown.startsWith("# ")).toBe(true);
     expect(markdown.includes("- ")).toBe(true);
+  });
+
+  it("should run agent-team orchestration end-to-end", async () => {
+    const result = await generateDeckByAgentTeam(mockConfig, {
+      topic: "智能制造转型路线",
+      pages: 3,
+      requirements: "需要大纲、文案、背景和布局",
+      orchestrationMode: "agent-team",
+      themeTemplate: "business"
+    });
+
+    expect(result.orchestration.mode).toBe("agent-team");
+    expect(result.orchestration.fallbackTriggered).toBe(false);
+    expect(result.orchestration.issues.length).toBe(0);
+    expect(result.orchestration.slides).toHaveLength(3);
+    expect(result.orchestration.slides[0].markdown.startsWith("# ")).toBe(true);
+  });
+
+  it("should report page mismatch validation failure in agent-team mode", async () => {
+    await expect(
+      generateDeckByAgentTeam(mockConfig, {
+        topic: "测试页数不一致",
+        pages: 3,
+        requirements: "[team-fault:page-mismatch]",
+        orchestrationMode: "agent-team",
+        disableFallback: true,
+        themeTemplate: "business"
+      })
+    ).rejects.toThrow(/PAGE_COUNT_MISMATCH/);
+  });
+
+  it("should report invalid layout validation failure in agent-team mode", async () => {
+    await expect(
+      generateDeckByAgentTeam(mockConfig, {
+        topic: "测试布局越界",
+        pages: 3,
+        requirements: "[team-fault:invalid-layout]",
+        orchestrationMode: "agent-team",
+        disableFallback: true,
+        themeTemplate: "business"
+      })
+    ).rejects.toThrow(/LAYOUT_INVALID/);
+  });
+
+  it("should report missing outline validation failure in agent-team mode", async () => {
+    await expect(
+      generateDeckByAgentTeam(mockConfig, {
+        topic: "测试缺失大纲",
+        pages: 2,
+        requirements: "[team-fault:missing-outline]",
+        orchestrationMode: "agent-team",
+        disableFallback: true,
+        themeTemplate: "academic"
+      })
+    ).rejects.toThrow(/OUTLINE_MISSING/);
   });
 });

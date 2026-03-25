@@ -1,0 +1,46 @@
+{
+  "id": "shared-contract-boundary",
+  "name": "Shared Type Contract Boundary Unit",
+  "input": [
+    {
+      "name": "domainModels",
+      "type": "Deck | Slide | ElementModel | AIConfig",
+      "source": "packages/shared/src/types/deck.ts"
+    },
+    {
+      "name": "requestDTOs",
+      "type": "CreateDeckRequest | AddSlideRequest | ImportMarkdownRequest | GenerateDeckRequest | GenerateDeckFromOutlineRequest | ExportDeckRequest",
+      "source": "packages/shared/src/types/deck.ts"
+    }
+  ],
+  "output": [
+    {
+      "name": "runtimeContractSurface",
+      "type": "TypeScript export boundary from @web-ppt/shared"
+    },
+    {
+      "name": "responseDTOs",
+      "type": "GenerateDeckResponse | GenerateDeckFromOutlineResponse | SlideMarkdownReadResponse | ExportJob"
+    }
+  ],
+  "validate": {
+    "v1": "Server route payloads should map to shared request/response interfaces",
+    "v2": "PermissionRole and collaborator/session types must remain cross-module compatible",
+    "v3": "Public exports are re-exported through shared/src/index.ts"
+  },
+  "constraints": [
+    "Boundary is type-only and runtime-agnostic",
+    "Schema evolution requires coordinated changes across server and web consumers",
+    "Breaking field changes impact API and websocket payload compatibility"
+  ],
+  "description": "Defines the canonical shared interface boundary consumed by server routes/services and web client integrations.",
+  "contentHash": "aded30c7b1016b6a",
+  "revision": {
+    "rev": 3,
+    "parentRev": 2,
+    "source": {
+      "type": "human"
+    },
+    "timestamp": "2026-03-25T01:55:43.451Z"
+  }
+}

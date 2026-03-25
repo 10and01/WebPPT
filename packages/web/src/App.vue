@@ -15,7 +15,6 @@ import {
   replaceSlideElements,
   rewriteSlideWithAI,
   startExport,
-  suggestVisuals,
   testAIConnection,
   updateAIConfig
 } from "./services/api";
@@ -42,7 +41,6 @@ const aiModel = ref("gpt-4.1-mini");
 const aiApiKey = ref("");
 const aiApiEndpoint = ref("");
 const aiTestMessage = ref("");
-const visualHints = ref<string[]>([]);
 const collabEnabled = ref(false);
 const role = ref<"editor" | "viewer">("editor");
 const currentUserId = `user-${Math.random().toString(36).slice(2, 7)}`;
@@ -123,6 +121,14 @@ const markdownPreviewHtml = computed(() => {
   } catch {
     return "<p>Markdown parse failed.</p>";
   }
+});
+const activeSlideBackgroundDoc = computed(() => {
+  const raw = activeSlide.value?.bgHtml?.trim();
+  if (!raw) {
+    return "";
+  }
+
+  return `<!doctype html><html><head><meta charset=\"utf-8\"><style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:transparent;}*{box-sizing:border-box;}</style></head><body>${raw}</body></html>`;
 });
 const selectedElement = computed(
   () => activeSlide.value?.elements.find((element) => element.id === selectedElementId.value) || null
@@ -640,11 +646,6 @@ async function onAIGenerate() {
     markdownInput.value = generated.slides.map((slide) => slide.markdown).join("\n\n---\n\n");
     clearPendingEditTimers();
     replaceDeckLocally(generated.deck);
-
-    visualHints.value = await (async () => {
-      const v = await suggestVisuals(activeDeck.value!.id, markdownInput.value);
-      return v.suggestions;
-    })();
     status.value = "ai-outline-imported";
   } catch (err) {
     error.value = (err as Error).message;
@@ -761,13 +762,6 @@ async function onDeleteActiveSlide() {
   } catch (err) {
     error.value = (err as Error).message;
   }
-}
-
-async function onGenerateAndImportMarkdown() {
-  if (!activeDeck.value) {
-    return;
-  }
-  await onAIGenerate();
 }
 
 async function onExport(format: "html" | "pdf" | "pptx") {
@@ -939,13 +933,6 @@ onBeforeUnmount(() => {
       <button @click="onImportMarkdown" :disabled="!activeDeck">Import Markdown</button>
       <div class="markdown-preview" v-html="markdownPreviewHtml"></div>
 
-      <h3>AI Generate Rich Markdown</h3>
-      <label>Topic</label>
-      <input v-model="aiTopic" placeholder="e.g., 碳中和的商业模式" />
-      <label>Content Requirements (Markdown format guide will be included in prompt)</label>
-      <textarea v-model="aiGenerateRequirements" rows="8" placeholder="主标题：&#10;副标题：&#10;主要内容点（每行一个）：&#10;..."></textarea>
-      <button @click="onGenerateAndImportMarkdown" :disabled="!activeDeck">Generate & Import</button>
-
       <h3>Export</h3>
       <div class="row">
         <button @click="onExport('html')" :disabled="!activeDeck">HTML</button>
@@ -974,11 +961,6 @@ onBeforeUnmount(() => {
         <li v-for="user in collaborators" :key="user.userId">{{ user.userName }} ({{ user.role }})</li>
       </ul>
 
-      <h3>Visual Hints</h3>
-      <ul>
-        <li v-for="hint in visualHints" :key="hint">{{ hint }}</li>
-      </ul>
-
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="conflictMessage" class="warn">{{ conflictMessage }}</p>
     </aside>
@@ -992,6 +974,12 @@ onBeforeUnmount(() => {
       <input ref="uploadInputRef" type="file" accept="image/*" style="display: none" @change="onLocalImageSelected" />
 
       <div class="canvas" v-if="activeSlide" :style="{ backgroundColor: activeSlide.bgColor || '#ffffff' }">
+        <iframe
+          v-if="activeSlideBackgroundDoc"
+          class="canvas-bg-html"
+          sandbox="allow-same-origin"
+          :srcdoc="activeSlideBackgroundDoc"
+        ></iframe>
         <h1 class="slide-title">{{ activeSlide.title }}</h1>
 
         <div
@@ -1019,7 +1007,9 @@ onBeforeUnmount(() => {
             :style="{
               fontSize: `${element.style.fontSize || 22}px`,
               fontWeight: String(element.style.fontWeight || 500),
-              textAlign: element.style.textAlign || 'left'
+              textAlign: element.style.textAlign || 'left',
+              color: element.style.color || element.style.fill || '#0f172a',
+              fontFamily: element.style.fontFamily || 'Segoe UI, Tahoma, sans-serif'
             }"
             @input="updateElementText($event, element)"
           >

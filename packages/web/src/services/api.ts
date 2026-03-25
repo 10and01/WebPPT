@@ -299,6 +299,17 @@ export async function generateDeckByOutline(
   };
   slides: Array<{ slideId: string; slideNumber: number; title: string; markdown: string }>;
   deck: Deck;
+  orchestration?: {
+    mode: "agent-team" | "single-agent";
+    fallbackTriggered: boolean;
+    issues: Array<{
+      code: string;
+      stage: string;
+      message: string;
+      slideIndex?: number;
+      retryHint?: string;
+    }>;
+  };
 }> {
   const response = await fetch(`${API_BASE}/ai/decks/${deckId}/generate-by-outline`, {
     method: "POST",
@@ -324,6 +335,17 @@ export async function generateDeckByOutline(
     };
     slides: Array<{ slideId: string; slideNumber: number; title: string; markdown: string }>;
     deck: Deck;
+    orchestration?: {
+      mode: "agent-team" | "single-agent";
+      fallbackTriggered: boolean;
+      issues: Array<{
+        code: string;
+        stage: string;
+        message: string;
+        slideIndex?: number;
+        retryHint?: string;
+      }>;
+    };
   };
 }
 

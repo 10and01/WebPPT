@@ -52,6 +52,7 @@ export interface Slide {
   slideNumber: number;
   title: string;
   bgColor: string;
+  bgHtml?: string;
   elements: ElementModel[];
   activeEditorId?: string;
   createdAt: number;
@@ -181,12 +182,75 @@ export interface GenerateSlideMarkdownFromOutlineRequest {
   themeTemplate?: DeckThemeTemplate;
 }
 
+export type DeckOrchestrationMode = "single-agent" | "agent-team" | "auto";
+
+export interface SlideCopyArtifact {
+  index: number;
+  title: string;
+  bullets: string[];
+  notes?: string;
+}
+
+export interface SlideBackgroundArtifact {
+  index: number;
+  theme: string;
+  bgColor: string;
+  textColor: string;
+  visualHint: string;
+}
+
+export interface SlideLayoutRegion {
+  id: string;
+  kind: "title" | "subtitle" | "bullets" | "visual" | "notes";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SlideLayoutArtifact {
+  index: number;
+  template: string;
+  regions: SlideLayoutRegion[];
+}
+
+export interface SlideAgentTeamValidationIssue {
+  code:
+    | "OUTLINE_MISSING"
+    | "PAGE_COUNT_MISMATCH"
+    | "COPY_INCOMPLETE"
+    | "BACKGROUND_READABILITY"
+    | "LAYOUT_INVALID";
+  stage: "outline" | "copy" | "background" | "layout" | "compose";
+  message: string;
+  slideIndex?: number;
+  retryHint?: string;
+}
+
+export interface SlideAgentTeamSlide {
+  index: number;
+  title: string;
+  markdown: string;
+  copy: SlideCopyArtifact;
+  background: SlideBackgroundArtifact;
+  layout: SlideLayoutArtifact;
+}
+
+export interface SlideAgentTeamResult {
+  mode: "agent-team" | "single-agent";
+  fallbackTriggered: boolean;
+  issues: SlideAgentTeamValidationIssue[];
+  slides: SlideAgentTeamSlide[];
+}
+
 export interface GenerateDeckFromOutlineRequest {
   topic: string;
   pages: number;
   requirements?: string;
   themeTemplate?: DeckThemeTemplate;
   toolPolicy?: AIToolPolicy;
+  orchestrationMode?: DeckOrchestrationMode;
+  disableFallback?: boolean;
 }
 
 export interface GenerateDeckFromOutlineResponse {
@@ -198,6 +262,7 @@ export interface GenerateDeckFromOutlineResponse {
     markdown: string;
   }>;
   deck: Deck;
+  orchestration?: SlideAgentTeamResult;
 }
 
 export interface AISlideEditRequest {
